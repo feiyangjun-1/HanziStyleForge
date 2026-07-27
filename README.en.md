@@ -168,6 +168,8 @@ The global `topology` thresholds are calibrated for the built-in generator, whic
 
 `backend.topology` therefore relaxes the skeleton-similarity limits for non-native backends. **What it does not relax is component, hole and Euler delta**, which stay at zero and are what guarantees the generated glyph is the same character. In the same measurement their medians were already zero, so honest style transfer passes while a glyph that gained or lost a stroke is rejected and falls back to the reference.
 
+For the same reason, **a non-native backend skips the `refine` stage.** Long-run refinement searches for the candidate closest to the reference structure and gets there by blending towards the reference fallback. That purifies the built-in generator's noisy output; against style transfer it erases it, replacing 32 of 40 glyphs with reference forms in the measured run. Since `build` prefers `refined/selection.csv`, leaving it on would produce a font made almost entirely of reference outlines. Set `backend.run_refine=true` to force it anyway.
+
 > **Attribution requirement.** zi2zi-JiT's code is MIT licensed, but its "Font Artifact License Addendum" additionally requires attribution when you distribute a font product containing **more than 200 unique characters** built from its outputs. A normal run of this tool rebuilds far more than 200 characters, so if you generate with this backend, assume attribution applies: state "Created using zi2zi-JiT artifacts" and link to the upstream repository. This does not apply to fonts produced with the default backend. See `THIRD_PARTY_NOTICES.md`.
 
 ## Contributing

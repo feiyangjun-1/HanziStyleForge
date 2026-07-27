@@ -441,6 +441,43 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "save_all_family_candidates": False
         }
     },
+    "backend": {
+        # "native" keeps the built-in Style Encoder -> VQ -> Diffusion -> Refiner
+        # stack and is byte-for-byte the previous behaviour. Any other value
+        # routes generation through hanzistyleforge.backends.
+        "name": "native",
+        "candidate_count": 3,
+        # "resample" is correct when the backend consumed content images that
+        # this project rendered. "ref_bbox_fit" re-registers images of unknown
+        # provenance, at the cost of the candidate's own proportions.
+        "normalization": "resample",
+        "dir": {
+            "candidate_dirs": [],
+            "require_complete": False,
+        },
+        "zi2zi_jit": {
+            "repo_dir": "",
+            "checkpoint": "",
+            # Empty reuses the interpreter running HanziStyleForge. zi2zi-JiT's
+            # inference path needs only torch, numpy, opencv and einops.
+            "python_executable": "",
+            "model": "",
+            "sampling_method": "ab2",
+            "num_sampling_steps": 20,
+            "cfg_scale": 2.6,
+            "batch_size": 16,
+            # None conditions on the label-drop token, which is correct for the
+            # published checkpoints because they never saw this target font.
+            # Set to 0 after a LoRA fine-tune.
+            "font_label": None,
+            "chunk_size": 2048,
+            "style_pool_size": 64,
+            "timeout_seconds": 0,
+            # Triton has no official Windows build and zi2zi-JiT decorates two
+            # forward() methods with @torch.compile.
+            "disable_torch_compile": True,
+        },
+    },
     "benchmark": {
         "enabled": True,
         "maximum_glyphs": 1536,
@@ -491,6 +528,17 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
     fusion_decomposition = cfg.get("fusion", {}).get("component_atlas", {}).get("decomposition_file", "")
     if fusion_decomposition:
         cfg["fusion"]["component_atlas"]["decomposition_file"] = str(absolute_from(fusion_decomposition, base))
+    backend_cfg = cfg.get("backend", {})
+    zi2zi_cfg = backend_cfg.get("zi2zi_jit", {})
+    for key in ("repo_dir", "checkpoint", "python_executable"):
+        value = zi2zi_cfg.get(key, "")
+        if value:
+            zi2zi_cfg[key] = str(absolute_from(value, base))
+    directories = backend_cfg.get("dir", {}).get("candidate_dirs", [])
+    if directories:
+        backend_cfg["dir"]["candidate_dirs"] = [
+            str(absolute_from(item, base)) for item in directories if item
+        ]
     cfg["_config_path"] = str(config_path)
     cfg["_project_root"] = str(base)
     return cfg
@@ -536,6 +584,26 @@ def validate_config(cfg: dict[str, Any]) -> None:
     ensemble = cfg.get("marathon", {}).get("ensemble", {})
     if int(ensemble.get("independent_members", 0)) < 0 or int(ensemble.get("maximum_models", 1)) < 1:
         raise ValueError("marathon.ensemble has an invalid member count.")
+    backend_cfg = cfg.get("backend", {})
+    backend_name = str(backend_cfg.get("name", "native")).lower()
+    if backend_name not in {"native", "dir", "zi2zi-jit"}:
+        raise ValueError(
+            f"backend.name={backend_cfg.get('name')!r} is unknown. Available values: native, dir, zi2zi-jit."
+        )
+    if int(backend_cfg.get("candidate_count", 1)) < 1:
+        raise ValueError("backend.candidate_count must be at least 1.")
+    if str(backend_cfg.get("normalization", "resample")).lower() not in {"resample", "ref_bbox_fit"}:
+        raise ValueError("backend.normalization must be resample or ref_bbox_fit.")
+    if backend_name == "zi2zi-jit":
+        zi2zi_cfg = backend_cfg.get("zi2zi_jit", {})
+        if not str(zi2zi_cfg.get("repo_dir", "")).strip():
+            raise ValueError("backend.zi2zi_jit.repo_dir must be set when backend.name=zi2zi-jit.")
+        if not str(zi2zi_cfg.get("checkpoint", "")).strip():
+            raise ValueError("backend.zi2zi_jit.checkpoint must be set when backend.name=zi2zi-jit.")
+        if int(zi2zi_cfg.get("chunk_size", 1)) < 1:
+            raise ValueError("backend.zi2zi_jit.chunk_size must be at least 1.")
+        if int(zi2zi_cfg.get("batch_size", 1)) < 1:
+            raise ValueError("backend.zi2zi_jit.batch_size must be at least 1.")
     fusion = cfg.get("fusion", {})
     if bool(fusion.get("enabled", True)):
         if int(fusion.get("latent_channels", 32)) < 8:

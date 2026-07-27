@@ -9,6 +9,8 @@ from typing import Any
 
 from hanzistyleforge import __version__
 from hanzistyleforge.analysis import check_environment, prepare_project
+from hanzistyleforge.backend_inference import generate_with_backend
+from hanzistyleforge.backends.factory import backend_name
 from hanzistyleforge.benchmark import run_benchmark
 from hanzistyleforge.build_font import build_font
 from hanzistyleforge.config import load_config
@@ -162,8 +164,13 @@ def command_fusion_train(cfg: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def command_fusion_generate(cfg: dict[str, Any]) -> dict[str, Any]:
-    result = generate_fusion_and_select(cfg)
+def command_fusion_generate(cfg: dict[str, Any], backend: str | None = None) -> dict[str, Any]:
+    # "native" is the built-in fusion stack. Dispatching before any backend
+    # object is constructed keeps that path independent of the backends package.
+    if backend_name(cfg, backend) == "native":
+        result = generate_fusion_and_select(cfg)
+    else:
+        result = generate_with_backend(cfg, backend_override=backend)
     _print(result)
     return result
 
@@ -202,12 +209,15 @@ def command_fusion_status(cfg: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def command_fusion_auto_months(cfg: dict[str, Any], force: bool = False) -> None:
+def command_fusion_auto_months(cfg: dict[str, Any], force: bool = False, backend: str | None = None) -> None:
     command_check(cfg)
     command_prepare(cfg, force=force)
-    command_atlas(cfg, force=force)
-    command_fusion_train(cfg)
-    command_fusion_generate(cfg)
+    if backend_name(cfg, backend) == "native":
+        # The atlas and the fusion models exist only to feed the native
+        # generator; a non-native backend must not spend weeks training them.
+        command_atlas(cfg, force=force)
+        command_fusion_train(cfg)
+    command_fusion_generate(cfg, backend)
     # Existing long-run pixel/SDF search remains useful as a post-selection
     # purifier and is fully resumable per glyph. It never becomes training data.
     command_refine(cfg)
@@ -249,6 +259,16 @@ def make_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--config", default="config_months_12gb.json")
+    parser.add_argument(
+        "--backend",
+        choices=["native", "dir", "zi2zi-jit"],
+        default=None,
+        help=(
+            "Override backend.name for this run. native is the built-in generation stack "
+            "and the default; dir reads an existing image directory; zi2zi-jit drives a "
+            "local zi2zi-JiT checkout."
+        ),
+    )
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check", help="Check fonts, PyTorch, CUDA, and target coverage")
@@ -301,9 +321,9 @@ def dispatch(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
     elif command == "contract": command_contract(cfg)
     elif command == "ids-install": command_ids_install(cfg, args.force)
     elif command == "fusion-train": command_fusion_train(cfg)
-    elif command == "fusion-generate": command_fusion_generate(cfg)
+    elif command == "fusion-generate": command_fusion_generate(cfg, args.backend)
     elif command == "fusion-status": command_fusion_status(cfg)
-    elif command == "fusion-auto-months": command_fusion_auto_months(cfg, args.force)
+    elif command == "fusion-auto-months": command_fusion_auto_months(cfg, args.force, args.backend)
     elif command == "auto-months": command_auto_months(cfg, args.force)
     elif command == "clean": command_clean(cfg, args.keep_render_cache)
 

@@ -9,6 +9,16 @@ from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTFont
 
+from hanzistyleforge.backends import (
+    BackendRequest,
+    BackendUnavailable,
+    DirectoryBackend,
+    GlyphRequest,
+    candidate_filename,
+    codepoint_from_filename,
+    normalize_candidate,
+    read_candidate_dir,
+)
 from hanzistyleforge.build_font import _map_codepoint
 from hanzistyleforge.features import expand_proxy_channels, make_target_aux, split_prediction
 from hanzistyleforge.fusion_selftest import run_fusion_selftest
@@ -34,6 +44,7 @@ from hanzistyleforge.model import FontStyleNetFinal, GlyphRefinerFinal, PatchDis
 from hanzistyleforge.proxy import (
     calibrate_observed_structure_thresholds,
     calibrate_same_structure_thresholds,
+    ink_bbox,
     make_content_proxy,
     make_reference_fallbacks,
     proxy_structure_score,
@@ -41,12 +52,140 @@ from hanzistyleforge.proxy import (
     save_ink,
     save_proxy,
 )
+from hanzistyleforge.image_cache import read_gray_u8
 from hanzistyleforge.report import _load_gray
 from hanzistyleforge.retrieval import StyleAtlas, _descriptor, render_retrieval_candidate
 from hanzistyleforge.runtime import configure_runtime
 from hanzistyleforge.topology import topology_metrics, validate_topology
 from hanzistyleforge.vectorize import image_to_ttglyph
 from hanzistyleforge.util import save_json, write_csv
+
+
+def run_backend_selftest() -> None:
+    """Exercise the pluggable generation-backend contract.
+
+    The dir backend is deliberately model-free, so this covers the filename
+    codec, candidate discovery and the 256 -> render.size normalization that
+    every other backend will route through.
+    """
+
+    assert candidate_filename(0x4E00) == "U+4E00.png"
+    assert candidate_filename(0x20000) == "U+20000.png"
+    assert codepoint_from_filename("U+4E00.png") == 0x4E00
+    # zi2zi-JiT's native output naming must be consumable without renaming.
+    assert codepoint_from_filename("0000_U+4E00.png") == 0x4E00
+    assert codepoint_from_filename("U+20B9F.png") == 0x20B9F
+    assert codepoint_from_filename("metadata.json") is None
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        reference_dir = root / "ref"
+        reference_dir.mkdir()
+        first = root / "candidate_00"
+        second = root / "candidate_01"
+        first.mkdir()
+        second.mkdir()
+
+        # A cross that is offset and undersized inside its 256 frame, so the
+        # two normalization modes provably differ.
+        small = np.zeros((256, 256), dtype=np.float32)
+        small[40:150, 80:96] = 1.0
+        small[80:96, 40:150] = 1.0
+        save_ink(first / "U+4E00.png", small)
+        save_ink(first / "U+4E8C.png", small)
+        # The second candidate covers only one of the two requested glyphs;
+        # partial coverage must be reported, not raised.
+        save_ink(second / "U+4E00.png", small)
+        (second / "notes.txt").write_text("ignored", encoding="utf-8")
+
+        centred = np.zeros((512, 512), dtype=np.float32)
+        centred[100:412, 240:272] = 1.0
+        centred[240:272, 100:412] = 1.0
+        save_ink(reference_dir / "U+4E00.png", centred)
+
+        discovered = read_candidate_dir(first)
+        assert set(discovered) == {0x4E00, 0x4E8C}
+        assert read_candidate_dir(second) == {0x4E00: second / "U+4E00.png"}
+
+        duplicate = root / "duplicate"
+        duplicate.mkdir()
+        save_ink(duplicate / "U+4E00.png", small)
+        save_ink(duplicate / "0007_U+4E00.png", small)
+        try:
+            read_candidate_dir(duplicate)
+        except ValueError as exc:
+            assert "U+4E00" in str(exc)
+        else:
+            raise AssertionError("a duplicated codepoint must be rejected")
+
+        backend = DirectoryBackend([first, second])
+        backend.preflight()
+        request = BackendRequest(
+            glyphs=(
+                GlyphRequest(0x4E00, reference_dir / "U+4E00.png", reference_dir / "U+4E00.png"),
+                GlyphRequest(0x4E8C, reference_dir / "U+4E00.png", reference_dir / "U+4E00.png"),
+            ),
+            style_font=Path("fonts/target.ttf"),
+            style_glyph_pngs={},
+            candidate_count=2,
+            output_root=root / "out",
+            work_dir=root,
+        )
+        result = backend.generate(request)
+        assert len(result.candidate_dirs) == 2
+        assert result.metadata["requested_glyphs"] == 2
+        assert result.metadata["candidate_dirs"][0]["requested_covered"] == 2
+        assert result.metadata["candidate_dirs"][1]["requested_covered"] == 1
+        assert result.metadata["missing_from_all_candidates"] == 0
+
+        resampled = normalize_candidate(first / "U+4E00.png", target_size=512, mode="resample")
+        assert resampled.shape == (512, 512)
+        assert 0.0 <= float(resampled.min()) and float(resampled.max()) <= 1.0
+        fitted = normalize_candidate(
+            first / "U+4E00.png",
+            target_size=512,
+            mode="ref_bbox_fit",
+            reference_png=reference_dir / "U+4E00.png",
+        )
+        assert fitted.shape == (512, 512)
+        reference_box = ink_bbox(np.asarray(read_gray_u8(reference_dir / "U+4E00.png")) < 128)
+        fitted_box = ink_bbox(fitted >= 0.5)
+        assert reference_box is not None and fitted_box is not None
+        # ref_bbox_fit must land the ink on the reference box; plain resampling
+        # keeps the original off-centre placement.
+        assert all(abs(a - b) <= 3 for a, b in zip(fitted_box, reference_box))
+        assert ink_bbox(resampled >= 0.5) != fitted_box
+
+        try:
+            DirectoryBackend([root / "does_not_exist"]).preflight()
+        except BackendUnavailable as exc:
+            assert "cannot find" in str(exc)
+        else:
+            raise AssertionError("a missing candidate directory must fail preflight")
+
+        try:
+            DirectoryBackend([]).preflight()
+        except BackendUnavailable as exc:
+            assert "candidate_dirs" in str(exc)
+        else:
+            raise AssertionError("an unconfigured dir backend must fail preflight")
+
+        missing_request = BackendRequest(
+            glyphs=(GlyphRequest(0x9F98, reference_dir / "U+4E00.png", reference_dir / "U+4E00.png"),),
+            style_font=Path("fonts/target.ttf"),
+            style_glyph_pngs={},
+            candidate_count=1,
+            output_root=root / "out",
+            work_dir=root,
+        )
+        tolerant = DirectoryBackend([first]).generate(missing_request)
+        assert tolerant.metadata["missing_from_all_candidates"] == 1
+        try:
+            DirectoryBackend([first], require_complete=True).generate(missing_request)
+        except BackendUnavailable as exc:
+            assert "U+9F98" in str(exc)
+        else:
+            raise AssertionError("require_complete must reject an uncovered glyph")
 
 
 def main() -> None:
@@ -450,6 +589,7 @@ def main() -> None:
         score, features = discriminator(generator_ink, return_features=True)
     assert score.ndim == 4 and features
     run_fusion_selftest()
+    run_backend_selftest()
     print("HanziStyleForge Fusion self-test: OK")
 
 

@@ -113,7 +113,6 @@ HanziStyleForge Fusion은 독립 구현입니다. 다음 프로젝트와 논문�
 | 출처 | 참고한 방향 |
 |---|---|
 | [zi2zi](https://github.com/kaonashi-tyc/zi2zi) | 한자 스타일 변환, 내용과 스타일 분리 |
-| [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) | 다중 참조 스타일 조건, 확산 Transformer |
 | [FontDiffuser](https://github.com/yeungchenwa/FontDiffuser) | 확산 생성, 다중 스케일 내용 집계, 명시적 스타일 제약 |
 | [HanziGen](https://github.com/wangwenho/HanziGen) | VQ 표현과 조건부 잠재 확산 |
 | [VQ-Font](https://github.com/Yaomingshuai/VQ-Font) | 이산 글꼴 token과 구조 인식 강화 |
@@ -123,6 +122,16 @@ HanziStyleForge Fusion은 독립 구현입니다. 다음 프로젝트와 논문�
 | [cjkvi/cjkvi-ids](https://github.com/cjkvi/cjkvi-ids) | Unicode IDS 부품 구조와 지역 힌트 |
 
 인용은 방법상의 참고만 의미하며, 상위 프로젝트의 코드, 가중치, 데이터 또는 글꼴을 복사할 권한을 부여하지 않습니다. 타사 자료를 사용하기 전에 현재 라이선스와 이용 약관을 확인하십시오.
+
+[zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT)는 아래에 별도로 기재합니다. 아키텍처 참고를 넘어 선택적 생성 백엔드로 사용할 수 있기 때문입니다.
+
+## 선택적 생성 백엔드: zi2zi-JiT
+
+생성 단계는 교체 가능합니다. 기본 백엔드는 이 프로젝트가 자체 구현한 Style Encoder → VQ → Diffusion → Refiner입니다. 대안으로 생성을 [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT)(사전 학습 가중치를 제공하는 픽셀 공간 확산 Transformer)에 위임할 수 있습니다. 이때도 후보 선별, IDS 부품 검증, QA, 정밀화, 윤곽선 변환, TTF 빌드 등 하위 공정은 모두 HanziStyleForge Fusion이 담당합니다.
+
+zi2zi-JiT의 소스 코드와 가중치는 이 저장소에 포함되어 있지 않습니다. 상위 저장소 복제와 가중치 다운로드는 직접 하셔야 하며, 백엔드는 로컬 사본을 호출합니다.
+
+> **저작자 표시 의무.** zi2zi-JiT의 코드는 MIT 라이선스이지만, "Font Artifact License Addendum"이 산출물에 추가 조건을 부과합니다. 그 출력으로 만든 문자가 **200자를 초과하는** 글꼴 제품을 배포하는 경우 출처를 표시해야 합니다. 이 도구의 일반적인 실행은 200자를 크게 넘으므로, 이 백엔드를 사용했다면 표시가 필요하다고 가정하십시오. "Created using zi2zi-JiT artifacts"를 명시하고 상위 저장소 링크를 첨부합니다. 기본 백엔드로 생성한 글꼴에는 적용되지 않습니다. 자세한 내용은 `THIRD_PARTY_NOTICES.md`를 참조하십시오.
 
 ## 기여
 

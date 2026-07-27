@@ -112,7 +112,6 @@ HanziStyleForge Fusion is an independent implementation. The following projects 
 | Source | Ideas studied |
 |---|---|
 | [zi2zi](https://github.com/kaonashi-tyc/zi2zi) | Han glyph style transfer and content/style separation |
-| [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) | Multi-reference style conditioning and diffusion transformers |
 | [FontDiffuser](https://github.com/yeungchenwa/FontDiffuser) | Diffusion generation, multi-scale content aggregation, explicit style constraints |
 | [HanziGen](https://github.com/wangwenho/HanziGen) | VQ representations and conditional latent diffusion |
 | [VQ-Font](https://github.com/Yaomingshuai/VQ-Font) | Discrete font tokens and structure-aware enhancement |
@@ -122,6 +121,16 @@ HanziStyleForge Fusion is an independent implementation. The following projects 
 | [cjkvi/cjkvi-ids](https://github.com/cjkvi/cjkvi-ids) | Unicode IDS component structure and local-region hints |
 
 A citation indicates architectural reference only. It does not grant permission to copy upstream code, weights, data, or fonts. Check the current license and terms of every third-party artifact before use.
+
+[zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) is listed separately below, because it is more than an architectural reference: it can be used as an optional generation backend.
+
+## Optional generation backend: zi2zi-JiT
+
+The generation stage is pluggable. The default backend is this project's own Style Encoder → VQ → Diffusion → Refiner stack. As an alternative, generation can be delegated to [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT), a pixel-space diffusion transformer with pretrained checkpoints, while HanziStyleForge Fusion keeps everything downstream: candidate selection, IDS component checks, QA, refinement, outline conversion, and TTF building.
+
+Neither zi2zi-JiT's source code nor its checkpoints are bundled here. You clone the upstream repository and download the checkpoints yourself; the backend then invokes your local copy.
+
+> **Attribution requirement.** zi2zi-JiT's code is MIT licensed, but its "Font Artifact License Addendum" additionally requires attribution when you distribute a font product containing **more than 200 unique characters** built from its outputs. A normal run of this tool rebuilds far more than 200 characters, so if you generate with this backend, assume attribution applies: state "Created using zi2zi-JiT artifacts" and link to the upstream repository. This does not apply to fonts produced with the default backend. See `THIRD_PARTY_NOTICES.md`.
 
 ## Contributing
 

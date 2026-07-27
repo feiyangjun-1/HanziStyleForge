@@ -112,7 +112,6 @@ HanziStyleForge Fusion 是独立实现。以下项目和论文为架构设计提
 | 来源 | 参考方向 |
 |---|---|
 | [zi2zi](https://github.com/kaonashi-tyc/zi2zi) | 汉字风格迁移、内容与风格分离 |
-| [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) | 多参考风格条件、扩散 Transformer |
 | [FontDiffuser](https://github.com/yeungchenwa/FontDiffuser) | 扩散生成、多尺度内容聚合、显式风格约束 |
 | [HanziGen](https://github.com/wangwenho/HanziGen) | VQ 表示与条件潜空间扩散 |
 | [VQ-Font](https://github.com/Yaomingshuai/VQ-Font) | 离散字体 token 与结构感知增强 |
@@ -122,6 +121,16 @@ HanziStyleForge Fusion 是独立实现。以下项目和论文为架构设计提
 | [cjkvi/cjkvi-ids](https://github.com/cjkvi/cjkvi-ids) | Unicode IDS 部件结构与局部区域提示 |
 
 引用只表示方法层面的参考，不代表获得复制上游代码、权重、数据或字体的许可。使用任何第三方材料前，请检查其当前许可证与使用条款。
+
+[zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) 单独列在下面，因为它不只是架构参考——它可以作为可选的生成后端使用。
+
+## 可选生成后端：zi2zi-JiT
+
+生成阶段是可插拔的。默认后端是本项目自研的 Style Encoder → VQ → Diffusion → Refiner。作为替代，生成可以交给 [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT)（一个像素空间扩散 Transformer，提供预训练权重），而 HanziStyleForge Fusion 保留其下游的全部环节：候选筛选、IDS 部件校验、QA、精修、轮廓转换和 TTF 构建。
+
+本仓库不打包 zi2zi-JiT 的源码，也不打包它的权重。你需要自行克隆上游仓库并下载权重，后端调用的是你本地的副本。
+
+> **署名义务。** zi2zi-JiT 的代码是 MIT 许可，但它的「Font Artifact License Addendum」对产物追加了条款：当你分发的字体产品中**超过 200 个字符**由它的输出构成时，必须注明出处。本工具一次正常运行重建的字数远超 200，所以只要你用了这个后端，就按需要署名处理：写明 "Created using zi2zi-JiT artifacts" 并附上上游仓库链接。使用默认后端生成的字体不受此约束。详见 `THIRD_PARTY_NOTICES.md`。
 
 ## 贡献
 

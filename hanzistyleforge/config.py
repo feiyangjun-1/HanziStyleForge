@@ -447,6 +447,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # routes generation through hanzistyleforge.backends.
         "name": "native",
         "candidate_count": 3,
+        # The long-run refiner optimizes towards the reference structure, so it
+        # discards a style-transfer backend's glyphs. Off for non-native
+        # backends; the native path is unaffected either way.
+        "run_refine": False,
         # "resample" is correct when the backend consumed content images that
         # this project rendered. "ref_bbox_fit" re-registers images of unknown
         # provenance, at the cost of the candidate's own proportions. A backend

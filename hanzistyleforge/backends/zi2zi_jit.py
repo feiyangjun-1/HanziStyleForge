@@ -88,6 +88,7 @@ class Zi2ziJitBackend:
         style_pool_size: int = 64,
         timeout_seconds: int = 0,
         keep_intermediate: bool = False,
+        disable_torch_compile: bool = True,
     ) -> None:
         self.repo_dir = Path(repo_dir)
         self.checkpoint = Path(checkpoint)
@@ -102,6 +103,7 @@ class Zi2ziJitBackend:
         self.style_pool_size = max(1, int(style_pool_size))
         self.timeout_seconds = max(0, int(timeout_seconds))
         self.keep_intermediate = bool(keep_intermediate)
+        self.disable_torch_compile = bool(disable_torch_compile)
         self._checkpoint_info: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ setup
@@ -114,6 +116,15 @@ class Zi2ziJitBackend:
         for variable in ("RANK", "WORLD_SIZE", "LOCAL_RANK", "SLURM_PROCID", "OMPI_COMM_WORLD_RANK"):
             environment.pop(variable, None)
         environment["PYTHONIOENCODING"] = "utf-8"
+        if self.disable_torch_compile:
+            # model_jit.py decorates two forward() methods with @torch.compile at
+            # class definition time. generate_chars.py neutralizes torch.compile
+            # only for non-CUDA devices, so on CUDA the decorators stay live and
+            # inductor demands Triton, which has no official Windows build. This
+            # project is Windows-first, so dynamo is disabled by default; set
+            # disable_torch_compile=False if you have installed Triton and want
+            # the compiled speedup.
+            environment["TORCHDYNAMO_DISABLE"] = "1"
         try:
             return subprocess.run(
                 [str(self.python_executable), *arguments],

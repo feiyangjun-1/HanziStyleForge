@@ -449,8 +449,38 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "candidate_count": 3,
         # "resample" is correct when the backend consumed content images that
         # this project rendered. "ref_bbox_fit" re-registers images of unknown
-        # provenance, at the cost of the candidate's own proportions.
+        # provenance, at the cost of the candidate's own proportions. A backend
+        # that reports a measured geometry transform overrides this with
+        # "affine", which is the only correct choice in that case.
         "normalization": "resample",
+        # Topology gate overrides applied on top of the global topology block
+        # for non-native backends only.
+        #
+        # The global thresholds are calibrated for the native generator, which
+        # is structure-locked to the reference proxy and therefore reproduces
+        # its skeleton closely. A backend performing genuine style transfer
+        # deviates from that skeleton by design, and measured against a
+        # fine-tuned zi2zi-JiT run the global gate rejected every glyph:
+        # topology_score ran at a median of 0.14 against a 0.06 limit and zone
+        # skeleton distance at 0.26 against 0.155.
+        #
+        # The values below sit at roughly the 90th percentile of that measured
+        # distribution. What is deliberately NOT relaxed is component, hole and
+        # Euler delta: those stay at the global zero and are what actually
+        # guarantees the generated glyph is the same character. In the same
+        # measurement their medians were already zero, so honest style transfer
+        # passes them while a glyph that gained or lost a stroke does not.
+        "topology": {
+            "maximum_topology_score": 0.30,
+            "maximum_zone_skeleton_distance": 0.50,
+            "maximum_missing_skeleton_p90": 0.090,
+            "maximum_extra_skeleton_p90": 0.070,
+            "maximum_hole_centroid_chamfer": 0.060,
+            "minimum_endpoint_tolerance": 6,
+            "minimum_junction_tolerance": 6,
+            "endpoint_tolerance_ratio": 0.45,
+            "junction_tolerance_ratio": 0.45,
+        },
         "dir": {
             "candidate_dirs": [],
             "require_complete": False,

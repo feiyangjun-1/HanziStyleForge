@@ -130,6 +130,44 @@ HanziStyleForge Fusion は独立実装です。以下のプロジェクトと論
 
 zi2zi-JiT のソースコードも重みも本リポジトリには同梱していません。上流リポジトリのクローンと重みのダウンロードはご自身で行い、バックエンドはそのローカルコピーを呼び出します。
 
+### 使い方
+
+バックエンドは `config.json` の `backend` ブロックで選択し、`--backend` で一時的に上書きできます。
+
+```text
+hanzistyleforge.py --backend=zi2zi-jit fusion-generate
+```
+
+指定できる値は `native`（既定。本プロジェクト独自の生成スタック）、`zi2zi-jit`、`dir` です。`dir` は生成済み画像のディレクトリを読み込みます。手動で生成した結果を取り込む場合や、生成器に依存せず後処理工程だけを検証する場合に使います。
+
+```json
+"backend": {
+  "name": "zi2zi-jit",
+  "candidate_count": 3,
+  "zi2zi_jit": {
+    "repo_dir": "D:/zi2zi-JiT",
+    "checkpoint": "D:/zi2zi-JiT/run/lora_target/checkpoint-last.pth",
+    "font_label": 0
+  }
+}
+```
+
+`python_executable` を空にすると HanziStyleForge を実行しているインタプリタを再利用します。zi2zi-JiT の推論経路に必要なのは torch、numpy、opencv、einops だけで、`environment.yaml` で固定された一式は不要です。
+
+### 先に LoRA ファインチューニングが必要です
+
+**公開されている JiT-B/16 の重みは事前学習の成果物であり、ゼロショットでは使えません。** 未知のフォントにそのまま適用すると画が系統的に欠落します。zi2zi-JiT の README にある生成例はすべてファインチューニング済みの重みを使っています。
+
+`scripts/generate_font_dataset.py` でデータセットを作成します。ソースフォントには推論時に与えるものと同じ `ref.otf` を使ってください。事前学習に合わせるより推論時の内容分布に合わせるほうが重要です。続いて `lora_single_gpu_finetune_jit.py` を実行し、得られた重みを `checkpoint` に指定して `font_label` を `0` にします（単一フォントのデータセットは `001_<name>` として配置されるため）。`font_label` を未設定にすると label-drop トークンを使いますが、それが意味を持つのはベース重みの場合だけです。
+
+Windows では加えて `TORCHDYNAMO_DISABLE=1`（Triton の Windows ビルドが存在しないため）、リポジトリ直下を指す `PYTHONPATH`（`scripts/` 配下のスクリプトは自身のディレクトリが `sys.path[0]` になるため）、`--num_workers 0`（DataLoader のワーカーが lambda を含む dataset を pickle する必要があるため）、`--online_eval` を付けないこと（FID を計算するが PyPI の torch-fidelity は上流が使う fork と API が異なるため）が必要です。
+
+### バックエンドに別のトポロジー閾値を設ける理由
+
+全体の `topology` 閾値は組み込み生成器向けに較正されています。組み込み生成器は参照に structure-lock されるため、その骨格に非常に近い結果を出します。真のスタイル変換を行うバックエンドは設計上そこから乖離するため、同じ閾値ではすべての出力が却下されます（実測で `topology_score` の中央値は 0.14、上限は 0.06）。
+
+そこで `backend.topology` は非 native バックエンドに対して骨格類似度の上限だけを緩めます。**緩めないのは連結成分・穴・オイラー数の差**で、これらはゼロのまま保たれ、生成された字が同じ文字であることを保証します。同じ実測でこれらの中央値はすでにゼロだったため、正常なスタイル変換は通過し、画が増減した字は却下されて参照側にフォールバックします。
+
 > **表示義務。** zi2zi-JiT のコードは MIT ライセンスですが、「Font Artifact License Addendum」が生成物に追加条件を課します。その出力から作られた文字が **200 文字を超える** フォント製品を配布する場合、出典表示が必要です。本ツールの通常の実行では 200 文字をはるかに超えるため、このバックエンドを使ったなら表示が必要だと考えてください。"Created using zi2zi-JiT artifacts" と記載し、上流リポジトリへのリンクを添えます。既定のバックエンドで生成したフォントには適用されません。詳細は `THIRD_PARTY_NOTICES.md` を参照してください。
 
 ## コントリビューション

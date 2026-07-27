@@ -12,6 +12,7 @@ from fontTools.ttLib import TTFont
 from hanzistyleforge.backends import (
     BackendRequest,
     BackendUnavailable,
+    CandidateGeometry,
     DirectoryBackend,
     GlyphRequest,
     Zi2ziJitBackend,
@@ -59,7 +60,8 @@ from hanzistyleforge.retrieval import StyleAtlas, _descriptor, render_retrieval_
 from hanzistyleforge.runtime import configure_runtime
 from hanzistyleforge.topology import topology_metrics, validate_topology
 from hanzistyleforge.vectorize import image_to_ttglyph
-from hanzistyleforge.util import save_json, write_csv
+from hanzistyleforge.util import deep_merge, save_json, write_csv
+from hanzistyleforge.config import DEFAULT_CONFIG, load_config
 
 
 def run_backend_selftest() -> None:
@@ -188,7 +190,78 @@ def run_backend_selftest() -> None:
         else:
             raise AssertionError("require_complete must reject an uncovered glyph")
 
+        _check_candidate_geometry(first, reference_dir)
+        _check_backend_topology_override()
         _check_zi2zi_backend(root, reference_dir)
+
+
+def _check_candidate_geometry(candidate_dir: Path, reference_dir: Path) -> None:
+    """Cover the affine normalization used with a foreign rasterizer."""
+
+    geometry = CandidateGeometry(scale=2.0, offset_x=-8.0, offset_y=12.0)
+    assert CandidateGeometry.from_dict(geometry.as_dict()) == geometry
+
+    source = candidate_dir / "U+4E00.png"
+    fitted = normalize_candidate(
+        source, target_size=512, mode="affine", geometry=geometry
+    )
+    assert fitted.shape == (512, 512)
+
+    # The transform is measured from the backend's own resolution, so it must
+    # be applied to the source pixels directly. Resizing to the target size
+    # first and then scaling would double the magnification, which is a real
+    # bug this asserts against: a 110px-wide mark at 256 scaled by 2.0 must
+    # land at 220px, not 440px.
+    box = ink_bbox(fitted >= 0.5)
+    assert box is not None
+    width = box[2] - box[0]
+    assert 200 <= width <= 240, f"affine width {width} suggests a double-scaled candidate"
+
+    try:
+        normalize_candidate(source, target_size=512, mode="affine")
+    except ValueError as exc:
+        assert "geometry" in str(exc)
+    else:
+        raise AssertionError("affine mode without a geometry must be rejected")
+
+    try:
+        normalize_candidate(source, target_size=512, mode="nonsense")
+    except ValueError as exc:
+        assert "nonsense" in str(exc)
+    else:
+        raise AssertionError("an unknown normalization mode must be rejected")
+    del reference_dir
+
+
+def _check_backend_topology_override() -> None:
+    """The backend gate must relax similarity limits but never the invariants.
+
+    Component, hole and Euler delta are what guarantee the generated glyph is
+    the same character. The looser skeleton limits exist because a style
+    transfer backend deviates from the reference skeleton by design.
+    """
+
+    cfg = load_config("config.json") if Path("config.json").is_file() else {"topology": DEFAULT_CONFIG["topology"], "backend": DEFAULT_CONFIG["backend"]}
+    merged = deep_merge(cfg["topology"], cfg["backend"]["topology"])
+    assert merged["maximum_component_delta"] == cfg["topology"]["maximum_component_delta"] == 0
+    assert merged["maximum_hole_delta"] == cfg["topology"]["maximum_hole_delta"] == 0
+    assert merged["maximum_euler_delta"] == cfg["topology"]["maximum_euler_delta"] == 0
+    assert merged["maximum_topology_score"] > cfg["topology"]["maximum_topology_score"]
+    assert merged["maximum_zone_skeleton_distance"] > cfg["topology"]["maximum_zone_skeleton_distance"]
+    assert merged["maximum_missing_skeleton_p90"] > cfg["topology"]["maximum_missing_skeleton_p90"]
+
+    # A candidate that keeps the reference topology but shifts strokes must
+    # pass the backend gate and fail the native one.
+    reference = np.zeros((256, 256), dtype=np.float32)
+    reference[40:216, 118:138] = 1.0
+    reference[118:138, 40:216] = 1.0
+    shifted = np.zeros((256, 256), dtype=np.float32)
+    shifted[40:216, 128:148] = 1.0
+    shifted[108:128, 40:216] = 1.0
+    metrics = topology_metrics(reference, shifted, size=192, prune_iterations=1)
+    assert int(metrics["component_delta"]) == 0
+    assert validate_topology(metrics, merged)["hard_pass"]
+    assert not validate_topology(metrics, cfg["topology"])["hard_pass"]
 
 
 def _check_zi2zi_backend(root: Path, reference_dir: Path) -> None:

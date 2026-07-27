@@ -13,12 +13,14 @@ import cv2
 import numpy as np
 
 from ..image_cache import read_gray_u8
+from ..proxy import ink_bbox
 from ..util import ensure_dir
 from .base import (
     CANDIDATE_SIZE,
     BackendRequest,
     BackendResult,
     BackendUnavailable,
+    CandidateGeometry,
     candidate_filename,
     codepoint_from_filename,
 )
@@ -38,6 +40,14 @@ DEFAULT_CFG_SCALE = 2.6
 # comfortably in memory nor survives np.savez_compressed, so generation is
 # always chunked.
 DEFAULT_CHUNK_SIZE = 2048
+
+
+def _ink_at_size(path: str | Path, size: int) -> np.ndarray:
+    gray = np.asarray(read_gray_u8(path), dtype=np.float32)
+    ink = (1.0 - gray / 255.0).clip(0.0, 1.0)
+    if ink.shape != (int(size), int(size)):
+        ink = cv2.resize(ink, (int(size), int(size)), interpolation=cv2.INTER_AREA)
+    return ink
 
 
 def _probe_source(checkpoint: Path) -> str:
@@ -225,6 +235,42 @@ class Zi2ziJitBackend:
 
     # ------------------------------------------------------------------- data
 
+    def _glyph_renderer(self, font: str | Path, resolution: int):
+        """Instantiate zi2zi-JiT's own rasterizer for a font.
+
+        The class is imported from the configured checkout rather than
+        reimplemented, because the fine-tuning dataset was rasterized by this
+        exact code. Any divergence would shift the content distribution the
+        model was tuned on and degrade output silently. Only
+        ``data_processing.font_utils`` is imported, which pulls in fontTools and
+        PIL but no torch, so none of the monkey-patching that forces the
+        subprocess boundary applies here.
+        """
+
+        repo = str(self.repo_dir.resolve())
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        try:
+            from data_processing.font_utils import GlyphRenderer
+        except ImportError as exc:
+            raise BackendUnavailable(
+                f"Could not import data_processing.font_utils from {self.repo_dir}: {exc}\n"
+                "Point backend.zi2zi_jit.repo_dir at a complete zi2zi-JiT checkout."
+            ) from exc
+        try:
+            return GlyphRenderer(str(font), int(resolution))
+        except Exception as exc:
+            raise BackendUnavailable(
+                f"zi2zi-JiT could not rasterize {font}: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    @staticmethod
+    def _to_chw(image: Any, size: int) -> np.ndarray:
+        array = np.asarray(image.convert("RGB"), dtype=np.uint8)
+        if array.shape[:2] != (size, size):
+            array = cv2.resize(array, (size, size), interpolation=cv2.INTER_LANCZOS4)
+        return array.transpose(2, 0, 1)
+
     @staticmethod
     def _rgb_uint8(path: str | Path, size: int) -> np.ndarray:
         gray = np.asarray(read_gray_u8(path), dtype=np.uint8)
@@ -232,6 +278,72 @@ class Zi2ziJitBackend:
             interpolation = cv2.INTER_AREA if gray.shape[0] > size else cv2.INTER_LANCZOS4
             gray = cv2.resize(gray, (size, size), interpolation=interpolation)
         return np.repeat(gray[None, :, :], 3, axis=0)
+
+    def measure_geometry(
+        self,
+        request: BackendRequest,
+        *,
+        target_size: int,
+        sample_count: int = 48,
+    ) -> CandidateGeometry:
+        """Estimate the transform from zi2zi-JiT's frame into this project's.
+
+        Both renderers draw the same reference outlines, so comparing ink
+        bounding boxes of the same glyphs rasterized both ways recovers the
+        uniform scale and translation between the frames. Medians over many
+        glyphs are used because a single glyph's box is sensitive to overshoot
+        and to strokes that touch the frame edge.
+        """
+
+        if request.reference_font is None:
+            raise BackendUnavailable(
+                "Measuring backend geometry needs the reference font; BackendRequest.reference_font is unset."
+            )
+        renderer = self._glyph_renderer(request.reference_font, CONTENT_SIZE)
+        scales: list[float] = []
+        centres: list[tuple[float, float, float, float]] = []
+        for glyph in request.glyphs[: max(8, int(sample_count))]:
+            image = renderer.render(glyph.codepoint)
+            if image is None:
+                continue
+            foreign = 1.0 - np.asarray(image.convert("L"), dtype=np.float32) / 255.0
+            ours = _ink_at_size(glyph.ref_png, target_size)
+            foreign_box = ink_bbox(foreign >= 0.5)
+            ours_box = ink_bbox(ours >= 0.5)
+            if foreign_box is None or ours_box is None:
+                continue
+            fx0, fy0, fx1, fy1 = foreign_box
+            ox0, oy0, ox1, oy1 = ours_box
+            foreign_extent = max(fx1 - fx0, fy1 - fy0)
+            ours_extent = max(ox1 - ox0, oy1 - oy0)
+            if foreign_extent < 4 or ours_extent < 4:
+                continue
+            scales.append(ours_extent / float(foreign_extent))
+            centres.append((
+                (fx0 + fx1) / 2.0, (fy0 + fy1) / 2.0,
+                (ox0 + ox1) / 2.0, (oy0 + oy1) / 2.0,
+            ))
+        if not scales:
+            raise BackendUnavailable(
+                "Could not measure backend geometry: no sampled glyph rendered in both frames."
+            )
+        scale = float(np.median(scales))
+        offsets_x = [ocx - scale * fcx for fcx, _, ocx, _ in centres]
+        offsets_y = [ocy - scale * fcy for _, fcy, _, ocy in centres]
+        return CandidateGeometry(
+            scale=scale,
+            offset_x=float(np.median(offsets_x)),
+            offset_y=float(np.median(offsets_y)),
+        )
+
+    def _style_codepoints(self, request: BackendRequest) -> list[int]:
+        available = sorted(request.style_glyph_pngs)
+        if not available:
+            return []
+        if len(available) <= self.style_pool_size:
+            return available
+        positions = np.linspace(0, len(available) - 1, self.style_pool_size, dtype=np.int64)
+        return [available[int(index)] for index in positions]
 
     def _style_pool(self, request: BackendRequest) -> list[Path]:
         available = sorted(request.style_glyph_pngs.items())
@@ -254,19 +366,38 @@ class Zi2ziJitBackend:
         style_pool: Sequence[Path],
         font_label: int,
         candidate_index: int,
+        content_renderer: Any = None,
+        style_renderer: Any = None,
+        style_codepoints: Sequence[int] = (),
     ) -> None:
         count = len(glyphs)
         content = np.empty((count, 3, CONTENT_SIZE, CONTENT_SIZE), dtype=np.uint8)
         style = np.empty((count, 3, STYLE_SIZE, STYLE_SIZE), dtype=np.uint8)
         unicode_labels = np.empty(count, dtype=np.int64)
         for index, glyph in enumerate(glyphs):
-            content[index] = self._rgb_uint8(glyph.ref_png, CONTENT_SIZE)
+            rendered = content_renderer.render(glyph.codepoint) if content_renderer is not None else None
+            if rendered is not None:
+                # Rasterized by zi2zi-JiT's own renderer so the content matches
+                # what the fine-tuning dataset was built from.
+                content[index] = self._to_chw(rendered, CONTENT_SIZE)
+            else:
+                content[index] = self._rgb_uint8(glyph.ref_png, CONTENT_SIZE)
             # Training drew a random reference per sample, so varying the
             # reference per glyph matches the training distribution.  Seeding it
             # on (candidate, codepoint) keeps a rerun reproducible while giving
             # each candidate a different style view.
-            choice = (glyph.codepoint * 2654435761 + candidate_index * 40503) % len(style_pool)
-            style[index] = self._rgb_uint8(style_pool[choice], STYLE_SIZE)
+            styled = None
+            if style_renderer is not None and style_codepoints:
+                choice = (glyph.codepoint * 2654435761 + candidate_index * 40503) % len(style_codepoints)
+                # Training rendered style references at CONTENT_SIZE and then
+                # downscaled them into the reference grid, so reproduce both
+                # steps rather than rasterizing straight to STYLE_SIZE.
+                styled = style_renderer.render(int(style_codepoints[choice]))
+            if styled is not None:
+                style[index] = self._to_chw(styled, STYLE_SIZE)
+            else:
+                choice = (glyph.codepoint * 2654435761 + candidate_index * 40503) % len(style_pool)
+                style[index] = self._rgb_uint8(style_pool[choice], STYLE_SIZE)
             unicode_labels[index] = int(glyph.codepoint)
         np.savez_compressed(
             path,
@@ -328,6 +459,19 @@ class Zi2ziJitBackend:
         root = ensure_dir(request.output_root)
         scratch = Path(tempfile.mkdtemp(prefix="zi2zi-jit-", dir=str(root)))
 
+        content_renderer = None
+        style_renderer = None
+        style_codepoints: list[int] = []
+        geometry: CandidateGeometry | None = None
+        if request.reference_font is not None:
+            content_renderer = self._glyph_renderer(request.reference_font, CONTENT_SIZE)
+            geometry = self.measure_geometry(request, target_size=CANDIDATE_SIZE * 2)
+            # Style references must come from the same rasterizer as the
+            # content, otherwise the style encoder sees a frame it never met
+            # during fine-tuning.
+            style_renderer = self._glyph_renderer(request.style_font, CONTENT_SIZE)
+            style_codepoints = self._style_codepoints(request)
+
         candidate_dirs: list[Path] = []
         chunk_reports: list[dict[str, Any]] = []
         try:
@@ -347,7 +491,10 @@ class Zi2ziJitBackend:
                     npz_path = scratch / f"{label}.npz"
                     output_dir = scratch / label
                     self._write_chunk_npz(
-                        npz_path, outstanding, style_pool, font_label, candidate_index
+                        npz_path, outstanding, style_pool, font_label, candidate_index,
+                        content_renderer=content_renderer,
+                        style_renderer=style_renderer,
+                        style_codepoints=style_codepoints,
                     )
                     produced = self._run_chunk(npz_path, output_dir)
                     collected = 0
@@ -396,6 +543,12 @@ class Zi2ziJitBackend:
             "requested_glyphs": len(requested),
             "missing_from_all_candidates": len(requested - covered),
             "chunks": chunk_reports,
+            # Present when content was rasterized by zi2zi-JiT's renderer; the
+            # caller must apply it, otherwise every outline lands in the wrong
+            # place inside the em box.
+            "content_renderer": "zi2zi-JiT" if content_renderer is not None else "hanzistyleforge",
+            "geometry": None if geometry is None else geometry.as_dict(),
+            "geometry_target_size": CANDIDATE_SIZE * 2,
         }
         return BackendResult(
             candidate_dirs=tuple(path.resolve() for path in candidate_dirs),

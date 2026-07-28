@@ -352,7 +352,28 @@ def _probability_certainty(probability: np.ndarray) -> float:
     return float(1.0 - np.mean(ambiguity[region]))
 
 
-def _confidence(candidate: dict[str, Any], probability: np.ndarray | None, keep_threshold: float) -> float:
+def _confidence(
+    candidate: dict[str, Any],
+    probability: np.ndarray | None,
+    keep_threshold: float,
+    *,
+    gate_relaxation: float = 1.0,
+    delta_relaxation: float = 1.0,
+) -> float:
+    """Score how far inside the acceptance gate a candidate sits.
+
+    The constants below are calibrated against the gate the native generator is
+    judged by. A caller judged by a different gate must say so, otherwise the
+    score is measured with one ruler while acceptance is measured with another:
+    a candidate comfortably inside a relaxed gate would still score near zero,
+    which is what made every backend glyph look low-confidence.
+
+    ``gate_relaxation`` is the ratio of the native topology-score limit to the
+    active one, and ``delta_relaxation`` the same ratio for the endpoint and
+    junction tolerances. Both default to 1.0, which reproduces the original
+    values exactly, so the native path is unaffected.
+    """
+
     structure = float(candidate["structure"]["structure_score"])
     topology_score = float(candidate["topology"]["topology_score"])
     style = float(candidate.get("style_score", 1.0))
@@ -362,9 +383,13 @@ def _confidence(candidate: dict[str, Any], probability: np.ndarray | None, keep_
         + 0.25 * int(candidate["topology"]["endpoint_delta"])
         + 0.25 * int(candidate["topology"]["junction_delta"])
     )
+    relaxation = max(float(gate_relaxation), 1e-6)
+    delta_relax = max(float(delta_relaxation), 1e-6)
     certainty = _probability_certainty(probability) if probability is not None else 0.86
-    structure_term = math.exp(-structure / max(keep_threshold * 1.8, 1e-4))
-    topology_term = math.exp(-5.0 * topology_score) * math.exp(-0.45 * topology_delta)
+    structure_term = math.exp(-structure / max(keep_threshold / relaxation * 1.8, 1e-4))
+    topology_term = math.exp(-5.0 * relaxation * topology_score) * math.exp(
+        -0.45 * delta_relax * topology_delta
+    )
     style_term = math.exp(-1.45 * style)
     hard = 1.0 if candidate["validation"]["hard_pass"] else 0.35
     return float(np.clip(certainty * structure_term * topology_term * style_term * hard, 0.0, 1.0))

@@ -521,7 +521,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "minimum_topology_pass_rate": 0.98,
         "warn_only": True,
     },
-    "qa": {"contact_sheet_count": 960},
+    "qa": {"contact_sheet_count": 960, "low_confidence_threshold": 0.75},
     "build": {
         "outline_mode": "sdf_quadratic",
         "sdf_upsample": 4,

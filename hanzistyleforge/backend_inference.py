@@ -194,6 +194,20 @@ def generate_with_backend(
     threshold_offsets = [float(value) for value in fusion_inf.get(
         "threshold_offsets", normal_inf.get("threshold_offsets", [-0.10, -0.06, -0.03, 0.0, 0.03, 0.06, 0.10])
     )]
+    # _confidence's constants are calibrated against the native gate. This path
+    # is judged by the relaxed backend gate, so it must be told the ratio;
+    # otherwise a candidate sitting comfortably inside the gate it was actually
+    # accepted by still scores near zero. The reference fallback keeps the
+    # native calibration because it is a reference-derived candidate and the
+    # native scale is the right one for it.
+    native_topology = cfg.get("topology", {})
+    gate_relaxation = float(native_topology.get("maximum_topology_score", 0.06)) / max(
+        float(topology_cfg.get("maximum_topology_score", 0.06)), 1e-6
+    )
+    delta_relaxation = float(native_topology.get("endpoint_tolerance_ratio", 0.16)) / max(
+        float(topology_cfg.get("endpoint_tolerance_ratio", 0.16)), 1e-6
+    )
+
     normalization = str(backend_cfg.get("normalization", "resample")).lower()
     # A backend that rasterized through its own renderer reports the transform
     # back into this project's frame. Honouring it is not optional: without it
@@ -297,10 +311,13 @@ def generate_with_backend(
 
                 consensus = np.mean(np.stack(probabilities, axis=0), axis=0) if probabilities else None
                 for source, family in families.items():
+                    is_fallback = source == "fallback"
                     family["confidence"] = _confidence(
                         family,
-                        None if source == "fallback" else consensus,
+                        None if is_fallback else consensus,
                         float(thresholds.get("keep", 0.05)),
+                        gate_relaxation=1.0 if is_fallback else gate_relaxation,
+                        delta_relaxation=1.0 if is_fallback else delta_relaxation,
                     )
 
                 # The reference fallback is a safety net here, not a competitor.

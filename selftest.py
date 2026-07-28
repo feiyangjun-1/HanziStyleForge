@@ -41,7 +41,7 @@ from hanzistyleforge.decomposition import (
 )
 from hanzistyleforge.marathon_refine import run_marathon_refinement
 from hanzistyleforge.losses import FontLossFinal, VQReconstructionLoss
-from hanzistyleforge.inference import _emergency_fallback_row
+from hanzistyleforge.inference import _confidence, _emergency_fallback_row
 from hanzistyleforge.model import FontStyleNetFinal, GlyphRefinerFinal, PatchDiscriminatorFinal
 from hanzistyleforge.proxy import (
     calibrate_observed_structure_thresholds,
@@ -192,7 +192,55 @@ def run_backend_selftest() -> None:
 
         _check_candidate_geometry(first, reference_dir)
         _check_backend_topology_override()
+        _check_confidence_calibration()
         _check_zi2zi_backend(root, reference_dir)
+
+
+def _check_confidence_calibration() -> None:
+    """Confidence must be measured on the scale the candidate is judged by.
+
+    Its constants are calibrated for the native gate. A candidate accepted by
+    the relaxed backend gate scored near zero on that scale, so every backend
+    glyph looked low-confidence and the QA report flagged an entire good run.
+    """
+
+    candidate = {
+        "structure": {"structure_score": 0.16},
+        "topology": {
+            "topology_score": 0.14,
+            "component_delta": 0,
+            "hole_delta": 0,
+            "endpoint_delta": 5,
+            "junction_delta": 4,
+        },
+        "style_score": 0.20,
+        "validation": {"hard_pass": True},
+    }
+
+    native = _confidence(candidate, None, 0.05)
+    # Defaults must reproduce the native calibration exactly, so the built-in
+    # generator's numbers cannot shift when a backend is configured.
+    assert _confidence(candidate, None, 0.05, gate_relaxation=1.0, delta_relaxation=1.0) == native
+
+    # 0.06/0.30 and 0.16/0.45 are the ratios between the native gate and the
+    # shipped backend gate.
+    relaxed = _confidence(candidate, None, 0.05, gate_relaxation=0.2, delta_relaxation=0.356)
+    assert relaxed > native, "a relaxed gate must not still score like the strict one"
+    assert relaxed > 10 * native, f"expected a large recalibration, got {native:.4f} -> {relaxed:.4f}"
+    assert 0.0 <= relaxed <= 1.0
+
+    # A candidate that is bad on the relaxed scale too must still score badly,
+    # otherwise the recalibration is just inflating every number.
+    bad = dict(candidate)
+    bad["topology"] = dict(candidate["topology"])
+    bad["topology"]["topology_score"] = 1.2
+    bad["topology"]["endpoint_delta"] = 40
+    bad["validation"] = {"hard_pass": False}
+    assert _confidence(bad, None, 0.05, gate_relaxation=0.2, delta_relaxation=0.356) < 0.05
+
+    profile = {"qa": {"low_confidence_threshold": 0.4}}
+    assert float(profile["qa"]["low_confidence_threshold"]) == 0.4
+    assert float(DEFAULT_CONFIG["qa"]["low_confidence_threshold"]) == 0.75
 
 
 def _check_candidate_geometry(candidate_dir: Path, reference_dir: Path) -> None:

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -67,10 +69,16 @@ def _style_glyph_pngs(work: Path, limit: int) -> dict[int, Path]:
 
 
 def _backend_fingerprint(cfg: dict[str, Any], analysis_path: Path, name: str) -> str:
+    # selection_workers only changes how the work is distributed, never the
+    # result, so it must not invalidate a partially completed run.
+    backend = {
+        key: value for key, value in cfg.get("backend", {}).items()
+        if key != "selection_workers"
+    }
     payload = {
         "version": FUSION_CHECKPOINT_VERSION,
         "analysis": sha256_file(analysis_path),
-        "backend": cfg.get("backend", {}),
+        "backend": backend,
         "backend_name": name,
         "topology": cfg.get("topology", {}),
         "render": cfg.get("render", {}),
@@ -78,6 +86,206 @@ def _backend_fingerprint(cfg: dict[str, Any], analysis_path: Path, name: str) ->
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+_WORKER_CONTEXT: dict[str, Any] = {}
+
+
+def _init_selection_worker(context: dict[str, Any]) -> None:
+    """Install the per-run constants in a worker process.
+
+    Passed once per worker rather than once per glyph: the style profiles and
+    topology configuration are identical for every glyph, and pickling them
+    tens of thousands of times would cost more than the work itself.
+    """
+
+    global _WORKER_CONTEXT
+    _WORKER_CONTEXT = context
+    # Each worker is one core's worth of work. Letting OpenCV start its own
+    # pool inside every worker oversubscribes the machine and runs slower than
+    # the single-threaded version.
+    cv2.setNumThreads(1)
+
+
+def _select_glyph(row: dict[str, str], images: list[str], context: dict[str, Any]) -> dict[str, Any]:
+    """Score one glyph's backend candidates and pick a winner.
+
+    Pure with respect to the parent process: everything it needs arrives in
+    ``context`` or is read from disk, and the only thing it writes is that
+    glyph's own chosen image, so parallel workers never contend.
+    """
+
+    cp = int(row["codepoint"])
+    name = context["name"]
+    inference_size = context["inference_size"]
+    analysis_size = context["analysis_size"]
+    profile_size = context["profile_size"]
+    topology_cfg = context["topology_cfg"]
+    threshold_offsets = context["threshold_offsets"]
+    weights = context["weights"]
+    maximum_border = context["maximum_border"]
+    chosen_dir = Path(context["chosen_dir"])
+
+    try:
+        proxy_metrics = read_proxy(row["ref_proxy_path"])
+        reference_ink = read_ink(row["ref_path"])
+        if reference_ink.shape != (inference_size, inference_size):
+            reference_ink = cv2.resize(
+                reference_ink, (inference_size, inference_size), interpolation=cv2.INTER_AREA
+            )
+        profile = _style_profile_for_complexity(
+            context["style_profiles"], float(row.get("complexity", 0.0) or 0.0)
+        )
+        reference_signature = topology_signature(
+            reference_ink,
+            size=int(topology_cfg.get("analysis_size", analysis_size)),
+            prune_iterations=int(topology_cfg.get("prune_iterations", 1)),
+        )
+
+        families: dict[str, dict[str, Any]] = {}
+        probabilities: list[np.ndarray] = []
+        for index, image in enumerate(images):
+            probability = normalize_candidate(
+                image,
+                target_size=inference_size,
+                mode=context["normalization"],
+                reference_png=row["ref_path"],
+                geometry=context["geometry"],
+            )
+            probabilities.append(probability)
+            # Backend output is antialiased, so sweeping thresholds over it
+            # produces genuinely different masks rather than copies.
+            label = f"{name}_c{index:02d}"
+            families[label] = _evaluate_family(
+                label,
+                _threshold_candidates(probability, 0.5, threshold_offsets, label),
+                proxy_metrics, reference_ink, profile, analysis_size, profile_size,
+                maximum_border, topology_cfg, weights["backend"], reference_signature,
+            )
+
+        if len(probabilities) >= 2:
+            stack = np.stack(probabilities, axis=0)
+            for suffix, blended in (("mean", stack.mean(axis=0)), ("median", np.median(stack, axis=0))):
+                label = f"{name}_{suffix}"
+                families[label] = _evaluate_family(
+                    label,
+                    _threshold_candidates(blended, 0.5, threshold_offsets, label),
+                    proxy_metrics, reference_ink, profile, analysis_size, profile_size,
+                    maximum_border, topology_cfg, weights["backend"], reference_signature,
+                )
+            disagreement = float(stack.std(axis=0).mean())
+        else:
+            disagreement = 0.0
+
+        families["fallback"] = _evaluate_family(
+            "fallback",
+            make_reference_fallbacks(reference_ink, profile, threshold=context["render_threshold"]),
+            proxy_metrics, reference_ink, profile, analysis_size, profile_size,
+            maximum_border, topology_cfg, weights["fallback"], reference_signature,
+        )
+
+        consensus = np.mean(np.stack(probabilities, axis=0), axis=0) if probabilities else None
+        for source, family in families.items():
+            is_fallback = source == "fallback"
+            family["confidence"] = _confidence(
+                family,
+                None if is_fallback else consensus,
+                context["keep_threshold"],
+                gate_relaxation=1.0 if is_fallback else context["gate_relaxation"],
+                delta_relaxation=1.0 if is_fallback else context["delta_relaxation"],
+            )
+
+        # The reference fallback is a safety net here, not a competitor. Every
+        # score in _evaluate_family measures similarity to the reference
+        # structure, and the fallback is derived from that structure, so it wins
+        # any ranking it takes part in. The native path can afford to rank it
+        # alongside its own candidates because those are structure-locked to the
+        # same reference; a backend doing style transfer deviates by design, and
+        # letting the fallback compete would silently rebuild the font out of
+        # reference outlines. It is used only when nothing else clears the gate.
+        backend_families = [family for source, family in families.items() if source != "fallback"]
+        passing = [family for family in backend_families if family["validation"]["hard_pass"]]
+        if passing:
+            chosen = min(passing, key=lambda item: (float(item["total_score"]), -float(item["confidence"])))
+        else:
+            chosen = families["fallback"]
+        chosen_source = str(chosen["source"])
+        chosen_path = chosen_dir / cp_filename(cp)
+        save_ink(chosen_path, np.asarray(chosen["mask"], dtype=np.float32).clip(0.0, 1.0))
+
+        has_target = bool(int(row.get("has_target", 0)))
+        notes = ""
+        if not chosen["validation"]["hard_pass"]:
+            notes = "All backend candidates failed the hard topology gate; ref-derived fallback selected."
+        elif not probabilities:
+            notes = f"Backend {name} produced no image for this glyph."
+
+        record: dict[str, Any] = {field: "" for field in BACKEND_SELECTION_FIELDS}
+        record.update({
+            "codepoint": cp,
+            "unicode": row.get("unicode", f"U+{cp:04X}"),
+            "char": row.get("char", chr(cp)),
+            "has_target": int(has_target),
+            "locl_sensitive": int(row.get("locl_sensitive", 0)),
+            "preliminary_status": row.get("preliminary_status", "rebuild"),
+            "final_action": "replace" if has_target else "add",
+            "chosen_source": chosen_source,
+            "chosen_label": chosen["label"],
+            "chosen_path": str(chosen_path.resolve()),
+            "ref_path": row.get("ref_path", ""),
+            "target_path": row.get("target_path", ""),
+            "ref_proxy_path": row.get("ref_proxy_path", ""),
+            "chosen_structure_score": chosen["structure"]["structure_score"],
+            "chosen_topology_score": chosen["topology"]["topology_score"],
+            "chosen_topology_pass": int(chosen["validation"]["hard_pass"]),
+            "chosen_component_delta": chosen["topology"]["component_delta"],
+            "chosen_hole_delta": chosen["topology"]["hole_delta"],
+            "chosen_endpoint_delta": chosen["topology"]["endpoint_delta"],
+            "chosen_junction_delta": chosen["topology"]["junction_delta"],
+            "chosen_confidence": chosen["confidence"],
+            "pseudo_eligible": 0,
+            "rejection_reasons": str({
+                source: family["validation"]["reasons"]
+                for source, family in families.items()
+                if not family["validation"]["hard_pass"]
+            }),
+            "notes": notes,
+            # Columns the existing QA report reads.
+            "neural_structure_score": chosen["structure"]["structure_score"],
+            "neural_topology_score": chosen["topology"]["topology_score"],
+            "neural_style_score": chosen.get("style_score", ""),
+            "neural_confidence": chosen["confidence"],
+            "fallback_structure_score": families["fallback"]["structure"]["structure_score"],
+            "fallback_topology_score": families["fallback"]["topology"]["topology_score"],
+            "backend_name": name,
+            "backend_candidate_count": len(probabilities),
+            "backend_candidate_index": chosen_source,
+            "backend_disagreement": disagreement,
+        })
+        return record
+    except Exception as exc:
+        emergency = _emergency_fallback_row(row, cp, chosen_dir, exc)
+        record = {field: "" for field in BACKEND_SELECTION_FIELDS}
+        record.update(emergency)
+        record["backend_name"] = name
+        record["backend_candidate_count"] = 0
+        return record
+
+
+def _select_glyph_task(task: tuple[dict[str, str], list[str]]) -> dict[str, Any]:
+    return _select_glyph(task[0], task[1], _WORKER_CONTEXT)
+
+
+def _resolve_worker_count(configured: int) -> int:
+    """Pick a worker count. 0 means auto."""
+
+    requested = int(configured)
+    if requested > 0:
+        return requested
+    available = os.cpu_count() or 1
+    # Half the cores, capped: each worker holds several 512x512 float buffers,
+    # and the stage is memory-bandwidth bound well before it is core bound.
+    return max(1, min(8, available // 2))
 
 
 def _write_partial(path: Path, state: Path, rows: list[dict[str, Any]], fingerprint: str, total: int) -> None:
@@ -238,174 +446,61 @@ def generate_with_backend(
         desc=f"HanziStyleForge {name} selection", unit="glyph",
     )
 
+    context = {
+        "name": name,
+        "inference_size": inference_size,
+        "analysis_size": analysis_size,
+        "profile_size": profile_size,
+        "topology_cfg": topology_cfg,
+        "threshold_offsets": threshold_offsets,
+        "weights": weights,
+        "maximum_border": maximum_border,
+        "normalization": normalization,
+        "geometry": geometry,
+        "style_profiles": style_profiles,
+        "keep_threshold": float(thresholds.get("keep", 0.05)),
+        "gate_relaxation": gate_relaxation,
+        "delta_relaxation": delta_relaxation,
+        "render_threshold": float(cfg["render"]["threshold"]),
+        "chosen_dir": str(chosen_dir),
+    }
+    tasks: list[tuple[dict[str, str], list[str]]] = []
+    for row in rows:
+        cp = int(row["codepoint"])
+        if cp in processed:
+            continue
+        tasks.append((dict(row), [str(mapping[cp]) for mapping in available if cp in mapping]))
+
+    workers = _resolve_worker_count(backend_cfg.get("selection_workers", 0))
     completed_since_checkpoint = 0
     try:
-        for row in rows:
-            cp = int(row["codepoint"])
-            if cp in processed:
-                continue
-            try:
-                proxy_metrics = read_proxy(row["ref_proxy_path"])
-                reference_ink = read_ink(row["ref_path"])
-                if reference_ink.shape != (inference_size, inference_size):
-                    reference_ink = cv2.resize(
-                        reference_ink, (inference_size, inference_size), interpolation=cv2.INTER_AREA
-                    )
-                profile = _style_profile_for_complexity(style_profiles, float(row.get("complexity", 0.0) or 0.0))
-                reference_signature = topology_signature(
-                    reference_ink,
-                    size=int(topology_cfg.get("analysis_size", analysis_size)),
-                    prune_iterations=int(topology_cfg.get("prune_iterations", 1)),
-                )
-
-                families: dict[str, dict[str, Any]] = {}
-                probabilities: list[np.ndarray] = []
-                for index, mapping in enumerate(available):
-                    image = mapping.get(cp)
-                    if image is None:
-                        continue
-                    probability = normalize_candidate(
-                        image,
-                        target_size=inference_size,
-                        mode=normalization,
-                        reference_png=row["ref_path"],
-                        geometry=geometry,
-                    )
-                    probabilities.append(probability)
-                    # Backend output is antialiased, so sweeping thresholds over
-                    # it produces genuinely different masks rather than copies.
-                    label = f"{name}_c{index:02d}"
-                    families[label] = _evaluate_family(
-                        label,
-                        _threshold_candidates(probability, 0.5, threshold_offsets, label),
-                        proxy_metrics, reference_ink, profile, analysis_size, profile_size,
-                        maximum_border, topology_cfg, weights["backend"], reference_signature,
-                    )
-
-                if len(probabilities) >= 2:
-                    stack = np.stack(probabilities, axis=0)
-                    mean = stack.mean(axis=0)
-                    median = np.median(stack, axis=0)
-                    families[f"{name}_mean"] = _evaluate_family(
-                        f"{name}_mean",
-                        _threshold_candidates(mean, 0.5, threshold_offsets, f"{name}_mean"),
-                        proxy_metrics, reference_ink, profile, analysis_size, profile_size,
-                        maximum_border, topology_cfg, weights["backend"], reference_signature,
-                    )
-                    families[f"{name}_median"] = _evaluate_family(
-                        f"{name}_median",
-                        _threshold_candidates(median, 0.5, threshold_offsets, f"{name}_median"),
-                        proxy_metrics, reference_ink, profile, analysis_size, profile_size,
-                        maximum_border, topology_cfg, weights["backend"], reference_signature,
-                    )
-                    disagreement = float(stack.std(axis=0).mean())
-                else:
-                    disagreement = 0.0
-
-                families["fallback"] = _evaluate_family(
-                    "fallback",
-                    make_reference_fallbacks(reference_ink, profile, threshold=float(cfg["render"]["threshold"])),
-                    proxy_metrics, reference_ink, profile, analysis_size, profile_size,
-                    maximum_border, topology_cfg, weights["fallback"], reference_signature,
-                )
-
-                consensus = np.mean(np.stack(probabilities, axis=0), axis=0) if probabilities else None
-                for source, family in families.items():
-                    is_fallback = source == "fallback"
-                    family["confidence"] = _confidence(
-                        family,
-                        None if is_fallback else consensus,
-                        float(thresholds.get("keep", 0.05)),
-                        gate_relaxation=1.0 if is_fallback else gate_relaxation,
-                        delta_relaxation=1.0 if is_fallback else delta_relaxation,
-                    )
-
-                # The reference fallback is a safety net here, not a competitor.
-                # Every score in _evaluate_family measures similarity to the
-                # reference structure, and the fallback is derived from that
-                # structure, so it wins any ranking it takes part in. The
-                # native path can afford to rank it alongside its own
-                # candidates because those are structure-locked to the same
-                # reference; a backend doing style transfer deviates by design,
-                # and letting the fallback compete would silently rebuild the
-                # font out of reference outlines. It is therefore used only
-                # when no backend candidate clears the hard gate.
-                backend_families = [
-                    family for source, family in families.items() if source != "fallback"
-                ]
-                passing = [family for family in backend_families if family["validation"]["hard_pass"]]
-                if passing:
-                    chosen = min(passing, key=lambda item: (float(item["total_score"]), -float(item["confidence"])))
-                else:
-                    chosen = families["fallback"]
-                chosen_source = str(chosen["source"])
-                chosen_path = chosen_dir / cp_filename(cp)
-                save_ink(chosen_path, np.asarray(chosen["mask"], dtype=np.float32).clip(0.0, 1.0))
-
-                has_target = bool(int(row.get("has_target", 0)))
-                notes = ""
-                if not chosen["validation"]["hard_pass"]:
-                    notes = "All backend candidates failed the hard topology gate; ref-derived fallback selected."
-                elif not probabilities:
-                    notes = f"Backend {name} produced no image for this glyph."
-
-                record: dict[str, Any] = {field: "" for field in BACKEND_SELECTION_FIELDS}
-                record.update({
-                    "codepoint": cp,
-                    "unicode": row.get("unicode", f"U+{cp:04X}"),
-                    "char": row.get("char", chr(cp)),
-                    "has_target": int(has_target),
-                    "locl_sensitive": int(row.get("locl_sensitive", 0)),
-                    "preliminary_status": row.get("preliminary_status", "rebuild"),
-                    "final_action": "replace" if has_target else "add",
-                    "chosen_source": chosen_source,
-                    "chosen_label": chosen["label"],
-                    "chosen_path": str(chosen_path.resolve()),
-                    "ref_path": row.get("ref_path", ""),
-                    "target_path": row.get("target_path", ""),
-                    "ref_proxy_path": row.get("ref_proxy_path", ""),
-                    "chosen_structure_score": chosen["structure"]["structure_score"],
-                    "chosen_topology_score": chosen["topology"]["topology_score"],
-                    "chosen_topology_pass": int(chosen["validation"]["hard_pass"]),
-                    "chosen_component_delta": chosen["topology"]["component_delta"],
-                    "chosen_hole_delta": chosen["topology"]["hole_delta"],
-                    "chosen_endpoint_delta": chosen["topology"]["endpoint_delta"],
-                    "chosen_junction_delta": chosen["topology"]["junction_delta"],
-                    "chosen_confidence": chosen["confidence"],
-                    "pseudo_eligible": 0,
-                    "rejection_reasons": str({
-                        source: family["validation"]["reasons"]
-                        for source, family in families.items()
-                        if not family["validation"]["hard_pass"]
-                    }),
-                    "notes": notes,
-                    # Columns the existing QA report reads.
-                    "neural_structure_score": chosen["structure"]["structure_score"],
-                    "neural_topology_score": chosen["topology"]["topology_score"],
-                    "neural_style_score": chosen.get("style_score", ""),
-                    "neural_confidence": chosen["confidence"],
-                    "fallback_structure_score": families["fallback"]["structure"]["structure_score"],
-                    "fallback_topology_score": families["fallback"]["topology"]["topology_score"],
-                    "backend_name": name,
-                    "backend_candidate_count": len(probabilities),
-                    "backend_candidate_index": chosen_source,
-                    "backend_disagreement": disagreement,
-                })
+        # Selection is CPU-bound, per glyph independent, and on a full font it
+        # dominates the wall clock: measured at roughly 59% of a 600-glyph run
+        # against 41% for generation on the GPU. ProcessPoolExecutor.map keeps
+        # results in submission order, so the resumable partial file is written
+        # in exactly the same order a serial run would produce.
+        if workers > 1 and len(tasks) > workers:
+            executor = ProcessPoolExecutor(
+                max_workers=workers, initializer=_init_selection_worker, initargs=(context,)
+            )
+            produced = executor.map(_select_glyph_task, tasks, chunksize=8)
+        else:
+            executor = None
+            _init_selection_worker(context)
+            produced = (_select_glyph_task(task) for task in tasks)
+        try:
+            for record in produced:
                 selection_rows.append(record)
-            except Exception as exc:
-                emergency = _emergency_fallback_row(row, cp, chosen_dir, exc)
-                record = {field: "" for field in BACKEND_SELECTION_FIELDS}
-                record.update(emergency)
-                record["backend_name"] = name
-                record["backend_candidate_count"] = 0
-                selection_rows.append(record)
-            processed.add(cp)
-            progress.update(1)
-            completed_since_checkpoint += 1
-            if completed_since_checkpoint >= progress_interval:
-                _write_partial(partial_path, state_path, selection_rows, fingerprint, len(rows))
-                guard.checkpoint_boundary()
-                completed_since_checkpoint = 0
+                processed.add(int(record["codepoint"]))
+                progress.update(1)
+                completed_since_checkpoint += 1
+                if completed_since_checkpoint >= progress_interval:
+                    _write_partial(partial_path, state_path, selection_rows, fingerprint, len(rows))
+                    guard.checkpoint_boundary()
+                    completed_since_checkpoint = 0
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True)
     finally:
         progress.close()
         if selection_rows and len(selection_rows) < len(rows):

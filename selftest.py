@@ -41,6 +41,7 @@ from hanzistyleforge.decomposition import (
 )
 from hanzistyleforge.marathon_refine import run_marathon_refinement
 from hanzistyleforge.losses import FontLossFinal, VQReconstructionLoss
+from hanzistyleforge.backend_inference import _backend_fingerprint, _resolve_worker_count
 from hanzistyleforge.inference import _confidence, _emergency_fallback_row
 from hanzistyleforge.model import FontStyleNetFinal, GlyphRefinerFinal, PatchDiscriminatorFinal
 from hanzistyleforge.proxy import (
@@ -193,7 +194,40 @@ def run_backend_selftest() -> None:
         _check_candidate_geometry(first, reference_dir)
         _check_backend_topology_override()
         _check_confidence_calibration()
+        _check_selection_parallelism()
         _check_zi2zi_backend(root, reference_dir)
+
+
+def _check_selection_parallelism() -> None:
+    """Worker count must never influence the result or invalidate a resume."""
+
+    assert _resolve_worker_count(4) == 4
+    assert _resolve_worker_count(1) == 1
+    auto = _resolve_worker_count(0)
+    assert 1 <= auto <= 8, f"auto worker count {auto} outside the intended range"
+
+    # selection_workers is a scheduling knob, so changing it must leave the
+    # fingerprint alone; otherwise raising parallelism throws away a
+    # part-finished multi-hour run.
+    with tempfile.TemporaryDirectory() as temporary:
+        analysis = Path(temporary) / "analysis.csv"
+        analysis.write_text("codepoint\n19968\n", encoding="utf-8")
+        base = {
+            "backend": {"name": "dir", "candidate_count": 3, "selection_workers": 0},
+            "topology": {"maximum_topology_score": 0.06},
+            "render": {"size": 512},
+            "inference": {},
+        }
+        other = {
+            "backend": {"name": "dir", "candidate_count": 3, "selection_workers": 8},
+            "topology": {"maximum_topology_score": 0.06},
+            "render": {"size": 512},
+            "inference": {},
+        }
+        assert _backend_fingerprint(base, analysis, "dir") == _backend_fingerprint(other, analysis, "dir")
+        # A knob that does change the result still must.
+        changed = {**other, "backend": {**other["backend"], "candidate_count": 5}}
+        assert _backend_fingerprint(base, analysis, "dir") != _backend_fingerprint(changed, analysis, "dir")
 
 
 def _check_confidence_calibration() -> None:

@@ -130,6 +130,48 @@ HanziStyleForge Fusion 是独立实现。以下项目和论文为架构设计提
 
 本仓库不打包 zi2zi-JiT 的源码，也不打包它的权重。你需要自行克隆上游仓库并下载权重，后端调用的是你本地的副本。
 
+### 怎么用
+
+后端由 `config.json` 的 `backend` 块选择，也可以用 `--backend` 临时覆盖：
+
+```text
+hanzistyleforge.py --backend=zi2zi-jit fusion-generate
+```
+
+可选值 `native`（默认，自研生成栈）、`zi2zi-jit`、`dir`（直接读一个已生成好的图片目录，用于手工跑生成后衔接，或在不依赖任何生成器的情况下验证后处理链路）。
+
+```json
+"backend": {
+  "name": "zi2zi-jit",
+  "candidate_count": 3,
+  "zi2zi_jit": {
+    "repo_dir": "D:/zi2zi-JiT",
+    "checkpoint": "D:/zi2zi-JiT/run/lora_target/checkpoint-last.pth",
+    "font_label": 0
+  }
+}
+```
+
+`python_executable` 留空表示复用运行 HanziStyleForge 的解释器——zi2zi-JiT 的推理路径只需要 torch、numpy、opencv 和 einops，不需要它 `environment.yaml` 里钉住的那套。
+
+### 必须先做 LoRA 微调
+
+**zi2zi-JiT 公开的 JiT-B/16 权重是预训练产物，不能零样本使用。** 直接拿它生成没见过的字体会系统性丢笔画（上少一竖、不变成 T、个变成人）。上游 README 里每个生成示例用的都是微调后的权重。
+
+用 `scripts/generate_font_dataset.py` 建数据集，源字体要用你的 `ref.otf`——推理时喂的就是它，对齐推理分布比对齐预训练更重要。然后跑 `lora_single_gpu_finetune_jit.py`。微调完把权重路径填进 `checkpoint`，并把 `font_label` 设成 `0`（单字体数据集的目录是 `001_<name>`，对应索引 0）；`font_label` 留空则使用 label-drop token，那只对基座权重有意义。
+
+Windows 上还需要：`TORCHDYNAMO_DISABLE=1`（Triton 无 Windows 构建）、`PYTHONPATH` 指向仓库根（`scripts/` 下脚本的 `sys.path[0]` 是脚本目录）、`--num_workers 0`（DataLoader worker 在 Windows 上要 pickle 含 lambda 的 dataset）、去掉 `--online_eval`（它算 FID，PyPI 版 torch-fidelity 与上游用的 fork API 不一致）。
+
+### 拓扑门槛为什么对后端另设一套
+
+全局 `topology` 阈值是为自研生成器标定的——它被 structure-lock 拉向参考字，因此能高度贴合参考骨架。做真实风格迁移的后端按设计就会偏离，用同一套阈值会拒绝掉全部产出（实测 `topology_score` 中位数 0.14，阈值 0.06）。
+
+所以 `backend.topology` 对非原生后端放宽了骨架相似度类指标。**没有放宽的是连通分量、孔洞和欧拉数之差**——这三项保持为 0，它们才是"生成的确实是同一个字"的保证。实测中它们的中位数本来就是 0，所以正常的风格迁移能通过，而多出或丢失一笔的字会被拦下，改用参考字兜底。
+
+`selection.csv` 里的置信度也按同一道门槛标定——它衡量的是"离门槛还有多少余量"，所以放宽后的后端路径分数天然低于原生路径。QA 判定低置信度的阈值 `qa.low_confidence_threshold` 因此可配（默认 0.75 对应原生标定）。实测 600 字的后端分布是 p10=0.125、p50=0.258、p90=0.486，用默认值会把每个字都标记成低置信度；`config_zi2zi_production.json` 里设的是 0.12，只标记最差的约 10%。
+
+同样的原因，**非原生后端会跳过 `refine` 阶段**。长跑精修的搜索目标是"最接近参考结构的候选"，并通过与参考兜底混合来达成——这对自研生成器的含噪输出是提纯，对风格迁移则是抹除：实测 40 个字里有 32 个被换回了参考字形。由于 `build` 优先读取 `refined/selection.csv`，不跳过的话最终字体会几乎全部由参考轮廓构成。需要强制运行可设 `backend.run_refine=true`。
+
 > **署名义务。** zi2zi-JiT 的代码是 MIT 许可，但它的「Font Artifact License Addendum」对产物追加了条款：当你分发的字体产品中**超过 200 个字符**由它的输出构成时，必须注明出处。本工具一次正常运行重建的字数远超 200，所以只要你用了这个后端，就按需要署名处理：写明 "Created using zi2zi-JiT artifacts" 并附上上游仓库链接。使用默认后端生成的字体不受此约束。详见 `THIRD_PARTY_NOTICES.md`。
 
 ## 贡献

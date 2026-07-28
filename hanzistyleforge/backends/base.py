@@ -53,7 +53,13 @@ class GlyphRequest:
 
 @dataclass(frozen=True)
 class BackendRequest:
-    """Everything a backend needs for one generation pass."""
+    """Everything a backend needs for one generation pass.
+
+    Both font files are supplied alongside the pre-rendered caches because a
+    backend may need to rasterize them itself: a model trained on a particular
+    renderer's output has to be fed that renderer's geometry, not this
+    project's.
+    """
 
     glyphs: tuple[GlyphRequest, ...]
     style_font: Path
@@ -61,9 +67,37 @@ class BackendRequest:
     candidate_count: int
     output_root: Path
     work_dir: Path
+    reference_font: Path | None = None
 
     def codepoints(self) -> tuple[int, ...]:
         return tuple(item.codepoint for item in self.glyphs)
+
+
+@dataclass(frozen=True)
+class CandidateGeometry:
+    """A similarity transform from a backend's frame into the project's.
+
+    A backend that rasterizes with a foreign renderer produces images in that
+    renderer's geometry. Both renderers draw the same outlines, so the mapping
+    between them is a uniform scale plus a translation, constant for the whole
+    font. Estimating it once and applying it to every glyph preserves each
+    glyph's own proportions, which per-glyph bounding-box fitting destroys.
+    """
+
+    scale: float
+    offset_x: float
+    offset_y: float
+
+    def as_dict(self) -> dict[str, float]:
+        return {"scale": self.scale, "offset_x": self.offset_x, "offset_y": self.offset_y}
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> "CandidateGeometry":
+        return cls(
+            scale=float(payload["scale"]),
+            offset_x=float(payload["offset_x"]),
+            offset_y=float(payload["offset_y"]),
+        )
 
 
 @dataclass(frozen=True)
@@ -195,12 +229,34 @@ def _fit_to_reference_bbox(candidate: np.ndarray, reference: np.ndarray) -> np.n
     return warped.clip(0.0, 1.0)
 
 
+def _apply_geometry(candidate: np.ndarray, geometry: CandidateGeometry, size: int) -> np.ndarray:
+    """Scale and translate a candidate into the project's frame."""
+
+    matrix = np.asarray(
+        [
+            [float(geometry.scale), 0.0, float(geometry.offset_x)],
+            [0.0, float(geometry.scale), float(geometry.offset_y)],
+        ],
+        dtype=np.float32,
+    )
+    warped = cv2.warpAffine(
+        candidate.astype(np.float32),
+        matrix,
+        (size, size),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0.0,
+    )
+    return warped.clip(0.0, 1.0)
+
+
 def normalize_candidate(
     candidate_png: str | Path,
     *,
     target_size: int,
     mode: str = "resample",
     reference_png: str | Path | None = None,
+    geometry: CandidateGeometry | None = None,
 ) -> np.ndarray:
     """Convert one backend PNG into an ink array in the project's geometry.
 
@@ -210,27 +266,39 @@ def normalize_candidate(
     that size, so feeding a raw 256px image downstream would misplace every
     outline.  This function is the single place that reconciles the two.
 
-    ``resample`` is correct when the backend was fed content images rendered by
-    this project's own ``FontRenderer``: the model then works in our geometry
-    already and only the resolution differs.  ``ref_bbox_fit`` re-registers an
-    image whose geometry is unknown, which is what a hand-assembled directory
-    needs.
+    ``affine`` is the mode to use with a model that rasterizes through its own
+    renderer: the backend measures the constant transform between the two
+    frames and every glyph is mapped by it, so relative proportions survive.
+    ``resample`` only rescales, which is correct when the backend consumed
+    content images this project rendered. ``ref_bbox_fit`` forces each glyph
+    onto the reference bounding box; it normalizes position and size for images
+    of unknown provenance but discards the candidate's own proportions, so it
+    is a last resort rather than a default.
     """
 
     ink = _ink_from_png(candidate_png)
     size = int(target_size)
+    normalized = str(mode).lower()
+
+    if normalized == "affine":
+        if geometry is None:
+            raise ValueError("normalization mode 'affine' requires a geometry transform.")
+        # The transform is measured from the backend's native resolution into
+        # the target frame, so it already carries the resolution change.
+        # Resizing first and then applying it would scale twice.
+        return _apply_geometry(ink, geometry, size).astype(np.float32)
+
     if ink.shape != (size, size):
         # INTER_AREA for downscaling preserves stroke mass; LANCZOS4 keeps
         # edges crisp when upsampling 256 -> 512.
         interpolation = cv2.INTER_AREA if ink.shape[0] > size else cv2.INTER_LANCZOS4
         ink = cv2.resize(ink, (size, size), interpolation=interpolation).clip(0.0, 1.0)
 
-    normalized = str(mode).lower()
     if normalized == "resample":
         return ink.astype(np.float32)
     if normalized != "ref_bbox_fit":
         raise ValueError(
-            f"Unknown backend normalization mode {mode!r}; expected 'resample' or 'ref_bbox_fit'."
+            f"Unknown backend normalization mode {mode!r}; expected 'resample', 'affine' or 'ref_bbox_fit'."
         )
     if reference_png is None:
         raise ValueError("normalization mode 'ref_bbox_fit' requires reference_png.")

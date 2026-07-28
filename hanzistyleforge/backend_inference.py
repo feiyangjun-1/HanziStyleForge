@@ -11,7 +11,7 @@ import numpy as np
 from tqdm import tqdm
 
 from .backends import BackendRequest, BackendUnavailable, GlyphRequest, read_candidate_dir
-from .backends.base import normalize_candidate
+from .backends.base import CandidateGeometry, normalize_candidate
 from .backends.factory import backend_name, create_backend
 from .contract import validate_data_flow_contract
 from .fusion_training import FUSION_CHECKPOINT_VERSION
@@ -28,6 +28,7 @@ from .proxy import make_reference_fallbacks, read_ink, read_proxy, save_ink
 from .topology import topology_signature
 from .util import (
     cp_filename,
+    deep_merge,
     ensure_dir,
     load_json,
     read_csv,
@@ -168,6 +169,7 @@ def generate_with_backend(
         candidate_count=candidate_count,
         output_root=candidate_root,
         work_dir=work,
+        reference_font=Path(cfg["paths"]["reference_font"]),
     )
     result = backend.generate(request)
     available = [read_candidate_dir(directory) for directory in result.candidate_dirs]
@@ -179,7 +181,10 @@ def generate_with_backend(
     style_profiles = load_json(profiles_path) if profiles_path.is_file() else {"global": style_profile, "bins": []}
     thresholds_path = work / "audit" / "structure_thresholds.json"
     thresholds = load_json(thresholds_path) if thresholds_path.is_file() else {"keep": 0.05}
-    topology_cfg = cfg.get("topology", {})
+    # The backend gate is the global one with the backend overrides applied.
+    # Structural invariants (component, hole and Euler delta) are inherited
+    # unchanged; only the skeleton-similarity limits move.
+    topology_cfg = deep_merge(cfg.get("topology", {}), backend_cfg.get("topology", {}))
     normal_inf = cfg.get("inference", {})
     fusion_inf = cfg.get("fusion", {}).get("inference", {})
     inference_size = int(fusion_inf.get("size", normal_inf.get("size", cfg["render"]["size"])))
@@ -189,7 +194,37 @@ def generate_with_backend(
     threshold_offsets = [float(value) for value in fusion_inf.get(
         "threshold_offsets", normal_inf.get("threshold_offsets", [-0.10, -0.06, -0.03, 0.0, 0.03, 0.06, 0.10])
     )]
+    # _confidence's constants are calibrated against the native gate. This path
+    # is judged by the relaxed backend gate, so it must be told the ratio;
+    # otherwise a candidate sitting comfortably inside the gate it was actually
+    # accepted by still scores near zero. The reference fallback keeps the
+    # native calibration because it is a reference-derived candidate and the
+    # native scale is the right one for it.
+    native_topology = cfg.get("topology", {})
+    gate_relaxation = float(native_topology.get("maximum_topology_score", 0.06)) / max(
+        float(topology_cfg.get("maximum_topology_score", 0.06)), 1e-6
+    )
+    delta_relaxation = float(native_topology.get("endpoint_tolerance_ratio", 0.16)) / max(
+        float(topology_cfg.get("endpoint_tolerance_ratio", 0.16)), 1e-6
+    )
+
     normalization = str(backend_cfg.get("normalization", "resample")).lower()
+    # A backend that rasterized through its own renderer reports the transform
+    # back into this project's frame. Honouring it is not optional: without it
+    # every outline is placed wrongly inside the em box, so it overrides the
+    # configured mode rather than being one more option.
+    geometry: CandidateGeometry | None = None
+    reported = result.metadata.get("geometry")
+    if isinstance(reported, dict):
+        geometry = CandidateGeometry.from_dict(reported)
+        scale_to_inference = float(inference_size) / max(1.0, float(result.metadata.get("geometry_target_size", inference_size)))
+        if abs(scale_to_inference - 1.0) > 1e-6:
+            geometry = CandidateGeometry(
+                scale=geometry.scale * scale_to_inference,
+                offset_x=geometry.offset_x * scale_to_inference,
+                offset_y=geometry.offset_y * scale_to_inference,
+            )
+        normalization = "affine"
     weights = {
         "backend": 1.00,
         "fallback": 1.12,
@@ -234,6 +269,7 @@ def generate_with_backend(
                         target_size=inference_size,
                         mode=normalization,
                         reference_png=row["ref_path"],
+                        geometry=geometry,
                     )
                     probabilities.append(probability)
                     # Backend output is antialiased, so sweeping thresholds over
@@ -275,13 +311,29 @@ def generate_with_backend(
 
                 consensus = np.mean(np.stack(probabilities, axis=0), axis=0) if probabilities else None
                 for source, family in families.items():
+                    is_fallback = source == "fallback"
                     family["confidence"] = _confidence(
                         family,
-                        None if source == "fallback" else consensus,
+                        None if is_fallback else consensus,
                         float(thresholds.get("keep", 0.05)),
+                        gate_relaxation=1.0 if is_fallback else gate_relaxation,
+                        delta_relaxation=1.0 if is_fallback else delta_relaxation,
                     )
 
-                passing = [family for family in families.values() if family["validation"]["hard_pass"]]
+                # The reference fallback is a safety net here, not a competitor.
+                # Every score in _evaluate_family measures similarity to the
+                # reference structure, and the fallback is derived from that
+                # structure, so it wins any ranking it takes part in. The
+                # native path can afford to rank it alongside its own
+                # candidates because those are structure-locked to the same
+                # reference; a backend doing style transfer deviates by design,
+                # and letting the fallback compete would silently rebuild the
+                # font out of reference outlines. It is therefore used only
+                # when no backend candidate clears the hard gate.
+                backend_families = [
+                    family for source, family in families.items() if source != "fallback"
+                ]
+                passing = [family for family in backend_families if family["validation"]["hard_pass"]]
                 if passing:
                     chosen = min(passing, key=lambda item: (float(item["total_score"]), -float(item["confidence"])))
                 else:

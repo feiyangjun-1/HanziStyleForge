@@ -85,7 +85,22 @@ def command_generate(cfg: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def command_refine(cfg: dict[str, Any]) -> dict[str, Any]:
+def command_refine(cfg: dict[str, Any], backend: str | None = None) -> dict[str, Any]:
+    # The long-run refiner searches for the candidate closest to the reference
+    # structure and blends towards the reference fallback to get there. That
+    # purifies the native generator's own noisy output, but it undoes a style
+    # transfer backend: measured on a 40-glyph run it replaced 32 of them with
+    # the reference. build_font prefers refined/selection.csv when it exists,
+    # so leaving this on would quietly rebuild the font out of reference
+    # outlines after the backend had already produced usable glyphs.
+    name = backend_name(cfg, backend)
+    if name != "native" and not bool(cfg.get("backend", {}).get("run_refine", False)):
+        message = (
+            f"Skipping refinement: it optimizes towards the reference structure and would "
+            f"discard the {name} backend's glyphs. Set backend.run_refine=true to force it."
+        )
+        print(message)
+        return {"enabled": False, "reason": message}
     result = run_marathon_refinement(cfg)
     _print(result)
     return result
@@ -219,8 +234,10 @@ def command_fusion_auto_months(cfg: dict[str, Any], force: bool = False, backend
         command_fusion_train(cfg)
     command_fusion_generate(cfg, backend)
     # Existing long-run pixel/SDF search remains useful as a post-selection
-    # purifier and is fully resumable per glyph. It never becomes training data.
-    command_refine(cfg)
+    # purifier for the native generator and is fully resumable per glyph. It
+    # never becomes training data, and it stands down for a backend whose
+    # output it would optimize away.
+    command_refine(cfg, backend)
     command_qa(cfg)
     command_build(cfg)
     work = Path(cfg["paths"]["work_dir"])
@@ -313,7 +330,7 @@ def dispatch(args: argparse.Namespace, cfg: dict[str, Any]) -> None:
     elif command == "marathon": command_marathon(cfg)
     elif command == "ensemble": command_ensemble(cfg)
     elif command == "generate": command_generate(cfg)
-    elif command == "refine": command_refine(cfg)
+    elif command == "refine": command_refine(cfg, args.backend)
     elif command == "benchmark": command_benchmark(cfg)
     elif command == "qa": command_qa(cfg)
     elif command == "build": command_build(cfg)

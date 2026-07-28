@@ -76,6 +76,11 @@ def make_qa_report(cfg: dict[str, Any]) -> dict[str, Any]:
             -float(row.get("chosen_topology_score", 0.0) or 0.0),
         ),
     )
+    # Absolute, so it only means anything on the scale confidence was computed
+    # on. Configurable rather than hardcoded because a run judged by a relaxed
+    # gate produces lower scores, and a report that flags every glyph teaches
+    # the reader to ignore it.
+    low_confidence_threshold = float(cfg.get("qa", {}).get("low_confidence_threshold", 0.75))
     sample_limit = int(cfg.get("qa", {}).get("contact_sheet_count", 200))
     pages = _make_sheet(ranked[:sample_limit], qa_dir)
     sources: dict[str, int] = {}
@@ -87,7 +92,7 @@ def make_qa_report(cfg: dict[str, Any]) -> dict[str, Any]:
         sources[source] = sources.get(source, 0) + 1
         label = row.get("chosen_label", "")
         labels[label] = labels.get(label, 0) + 1
-        if float(row.get("chosen_confidence", 0.0) or 0.0) < 0.75:
+        if float(row.get("chosen_confidence", 0.0) or 0.0) < low_confidence_threshold:
             low_confidence.append(row)
         raw_reasons = str(row.get("rejection_reasons", "") or "")
         for reason in ("component_delta", "hole_delta", "endpoint_delta", "junction_delta", "missing_skeleton", "extra_skeleton", "hole_position", "zone_structure", "euler_delta", "topology_score"):
@@ -102,6 +107,7 @@ def make_qa_report(cfg: dict[str, Any]) -> dict[str, Any]:
         "raw_ref_fallback_count": (labels.get("reference_raw", 0) + labels.get("reference_emergency", 0)),
         "fallback_rate": sources.get("fallback", 0) / max(1, len(rows)),
         "low_confidence_count": len(low_confidence),
+        "low_confidence_threshold": low_confidence_threshold,
         "rejection_reasons": rejection_reasons,
         "benchmark": benchmark,
         "training_coverage": {

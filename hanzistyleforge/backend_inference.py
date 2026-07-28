@@ -500,7 +500,11 @@ def generate_with_backend(
                     completed_since_checkpoint = 0
         finally:
             if executor is not None:
-                executor.shutdown(wait=True)
+                # map() queues every task up front, so a safe stop or an
+                # exception must cancel the backlog. Waiting for it would make
+                # a stop request take hours on a full font, and the work is
+                # recomputed on resume anyway.
+                executor.shutdown(wait=True, cancel_futures=True)
     finally:
         progress.close()
         if selection_rows and len(selection_rows) < len(rows):

@@ -1,18 +1,15 @@
 {
   "_note": "Full-coverage run through the zi2zi-JiT backend. Measured at 1.46 s per glyph on this machine with 3 candidates, so roughly 11 hours for the 27,924 Han glyphs covered by ref.otf, plus a one-off prepare that renders and caches every target and reference glyph. Not tracked in git: the paths are local.",
-
   "paths": {
     "target_font": "fonts/target.ttf",
     "reference_font": "refs/ref.otf",
     "work_dir": "work_zi2zi_production",
     "output_font": "build/target-zi2zi-jit.ttf"
   },
-
   "scope": {
     "mode": "reference_han",
     "include_compatibility_ideographs": true
   },
-
   "backend": {
     "name": "zi2zi-jit",
     "candidate_count": 3,
@@ -23,20 +20,27 @@
       "sampling_method": "ab2",
       "num_sampling_steps": 20,
       "cfg_scale": 2.6,
-      "batch_size": 16,
+      "batch_size": 32,
       "chunk_size": 2048,
       "style_pool_size": 64
+    },
+    "selection_workers": 0
+  },
+  "retrieval": {
+    "enabled": false
+  },
+  "fusion": {
+    "component_atlas": {
+      "enabled": false
+    },
+    "contour_polisher": {
+      "enabled": false
     }
   },
-
-  "retrieval": { "enabled": false },
-  "fusion": {
-    "component_atlas": { "enabled": false },
-    "contour_polisher": { "enabled": false }
+  "training": {
+    "device": "cuda",
+    "workers": 0
   },
-
-  "training": { "device": "cuda", "workers": 0 },
-
   "qa": {
     "contact_sheet_count": 400,
     "_low_confidence_threshold": "Confidence is scored on the scale of the gate a candidate is judged by. Measured over 600 glyphs through this backend the distribution runs p10=0.125, p50=0.258, p90=0.486, so the 0.75 default would flag every glyph. 0.12 flags roughly the worst tenth, which is what a review queue should contain.",

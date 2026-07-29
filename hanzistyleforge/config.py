@@ -451,6 +451,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # discards a style-transfer backend's glyphs. Off for non-native
         # backends; the native path is unaffected either way.
         "run_refine": False,
+        # Candidate selection is CPU-bound and per glyph independent, and on a
+        # full font it outweighs GPU generation: 59% against 41% of the wall
+        # clock on a measured 600-glyph run. 0 picks half the cores, capped at
+        # 8, since the stage saturates memory bandwidth before it saturates
+        # cores.
+        "selection_workers": 0,
         # "resample" is correct when the backend consumed content images that
         # this project rendered. "ref_bbox_fit" re-registers images of unknown
         # provenance, at the cost of the candidate's own proportions. A backend

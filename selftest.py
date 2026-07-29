@@ -23,6 +23,7 @@ from hanzistyleforge.backends import (
 )
 from hanzistyleforge.build_font import _map_codepoint
 from hanzistyleforge.features import expand_proxy_channels, make_target_aux, split_prediction
+from hanzistyleforge.fusion_model import VectorQuantizerEMA
 from hanzistyleforge.fusion_selftest import run_fusion_selftest
 from hanzistyleforge.fusion_training import (
     _create_vq_optimizer,
@@ -63,6 +64,67 @@ from hanzistyleforge.topology import topology_metrics, validate_topology
 from hanzistyleforge.vectorize import image_to_ttglyph
 from hanzistyleforge.util import deep_merge, save_json, write_csv
 from hanzistyleforge.config import DEFAULT_CONFIG, load_config
+
+
+def run_codebook_selftest() -> None:
+    """A VQ code that stops winning must not be annihilated.
+
+    The EMA update divides a decaying running average by a floored count, so an
+    unselected code shrinks geometrically towards the origin and can never be
+    chosen again. Measured on a real 1536-entry codebook trained for days:
+    34 entries had ever been used, the other 1502 sat at exactly zero, with a
+    median pairwise distance of zero between them.
+    """
+
+    def drifted(revive: float) -> tuple[float, int]:
+        """Seed a codebook on a wide distribution, then train on a narrow one.
+
+        Codes seeded away from the surviving mode stop being selected, which is
+        the situation the EMA update destroys them in.
+        """
+
+        torch.manual_seed(0)
+        quantizer = VectorQuantizerEMA(embeddings=64, dimension=8, decay=0.9, revive_threshold=revive)
+        quantizer.train()
+        torch.manual_seed(1)
+        quantizer(torch.randn(256, 8).mul(20.0).view(256, 8, 1, 1))
+        narrow = torch.full((256, 8), 4.0).view(256, 8, 1, 1) + torch.randn(256, 8, 1, 1) * 0.01
+        for _ in range(300):
+            quantizer(narrow)
+        norms = quantizer.codebook.norm(dim=1)
+        near = int(((quantizer.codebook - 4.0).norm(dim=1) < 1.0).sum())
+        return float(norms.min()), near
+
+    smallest, near = drifted(1.0)
+    assert near == 64, f"revival should bring every code back onto the data, got {near}/64"
+    assert smallest > 1.0, f"no code may be left at the origin, smallest norm {smallest:.2e}"
+
+    # The old behaviour must remain reproducible, both so it can be restored and
+    # so this test is demonstrating a real difference rather than asserting on
+    # something that was never broken.
+    smallest_off, near_off = drifted(0.0)
+    assert near_off <= 2, f"without revival the codebook should collapse, {near_off}/64 survived"
+    assert smallest_off < 1e-5, f"unselected codes should decay to zero, smallest {smallest_off:.2e}"
+
+    # A fresh codebook seeds itself from the data rather than the unit sphere.
+    torch.manual_seed(0)
+    seeded = VectorQuantizerEMA(embeddings=32, dimension=8, decay=0.9)
+    seeded.train()
+    far = torch.full((128, 8), 50.0).view(128, 8, 1, 1) + torch.randn(128, 8, 1, 1)
+    assert float(seeded.codebook.norm(dim=1).median()) < 5.0
+    seeded(far)
+    assert float(seeded.codebook.norm(dim=1).median()) > 40.0, "first batch must reseed the codebook"
+
+    # A resumed checkpoint keeps its learned codebook: a non-zero cluster_size
+    # is what marks it as already initialized, so no new buffer is needed and
+    # existing checkpoints still load strictly.
+    resumed = VectorQuantizerEMA(embeddings=32, dimension=8, decay=0.9)
+    resumed.load_state_dict(seeded.state_dict())
+    resumed.train()
+    before = resumed.codebook.clone()
+    resumed(far)
+    assert not torch.allclose(before, torch.zeros_like(before))
+    assert set(seeded.state_dict()) == set(VectorQuantizerEMA(embeddings=32, dimension=8).state_dict())
 
 
 def run_backend_selftest() -> None:
@@ -841,6 +903,7 @@ def main() -> None:
         score, features = discriminator(generator_ink, return_features=True)
     assert score.ndim == 4 and features
     run_fusion_selftest()
+    run_codebook_selftest()
     run_backend_selftest()
     print("HanziStyleForge Fusion self-test: OK")
 

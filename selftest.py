@@ -23,6 +23,7 @@ from hanzistyleforge.backends import (
 )
 from hanzistyleforge.build_font import _map_codepoint
 from hanzistyleforge.features import expand_proxy_channels, make_target_aux, split_prediction
+from hanzistyleforge.fusion_diffusion import ExponentialMovingAverage
 from hanzistyleforge.fusion_model import VectorQuantizerEMA
 from hanzistyleforge.fusion_selftest import run_fusion_selftest
 from hanzistyleforge.fusion_training import (
@@ -145,6 +146,36 @@ def run_codebook_selftest() -> None:
     resumed(far)
     assert not torch.allclose(before, torch.zeros_like(before))
     assert set(seeded.state_dict()) == set(VectorQuantizerEMA(embeddings=32, dimension=8).state_dict())
+
+
+def run_ema_resume_selftest() -> None:
+    """A restored EMA must survive the device the checkpoint was read onto.
+
+    torch.load brings the shadow back on the CPU while the model has already
+    been moved to the accelerator, so the first update after a resume failed
+    with a device mismatch. Only resumes hit it: a fresh run builds the shadow
+    from a model that is already in place.
+    """
+
+    model = torch.nn.Linear(4, 4)
+    ema = ExponentialMovingAverage(model, decay=0.99)
+    saved = ema.state_dict()
+    # Stand in for a checkpoint round trip, where every tensor comes back on
+    # the CPU regardless of where it was written from.
+    restored = ExponentialMovingAverage(model, decay=0.99)
+    restored.load_state_dict(
+        {"decay": saved["decay"], "shadow": {k: v.detach().cpu().clone() for k, v in saved["shadow"].items()}}
+    )
+    restored.update(model)
+    restored.copy_to(model)
+
+    if torch.cuda.is_available():
+        cuda_model = torch.nn.Linear(4, 4).cuda()
+        mismatched = ExponentialMovingAverage(cuda_model, decay=0.99)
+        mismatched.shadow = {name: value.cpu() for name, value in mismatched.shadow.items()}
+        mismatched.update(cuda_model)
+        assert all(value.is_cuda for value in mismatched.shadow.values())
+        mismatched.copy_to(cuda_model)
 
 
 def run_backend_selftest() -> None:
@@ -924,6 +955,7 @@ def main() -> None:
     assert score.ndim == 4 and features
     run_fusion_selftest()
     run_codebook_selftest()
+    run_ema_resume_selftest()
     run_backend_selftest()
     print("HanziStyleForge Fusion self-test: OK")
 

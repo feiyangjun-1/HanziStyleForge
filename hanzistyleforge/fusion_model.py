@@ -456,6 +456,21 @@ class VectorQuantizerEMA(nn.Module):
             - 2.0 * flat @ self.codebook.t()
             + self.codebook.square().sum(dim=1).unsqueeze(0)
         )
+        # A code that was never selected decays to the origin, and the origin is
+        # the nearest neighbour of anything near it. On a collapsed codebook
+        # that captures most of the latent grid and the decoder receives a
+        # near-constant field, which is how snapping turns a healthy sample into
+        # noise. Dead codes are therefore excluded from the search: a snap can
+        # only ever move a latent onto a code some real encoder output was once
+        # assigned to.
+        #
+        # The comparison is against epsilon rather than zero because the decay
+        # bottoms out at a denormal instead of a true zero. On a measured
+        # collapsed codebook the 1502 dead entries all sat at 1.4e-43, so a
+        # test for "greater than zero" excludes nothing at all.
+        alive = self.cluster_size > self.epsilon
+        if bool(alive.any()):
+            distances = distances.masked_fill(~alive.unsqueeze(0), float("inf"))
         indices = torch.argmin(distances, dim=1)
         quantized = F.embedding(indices, self.codebook).view(z.shape[0], z.shape[2], z.shape[3], self.dimension)
         quantized = quantized.permute(0, 3, 1, 2).contiguous()

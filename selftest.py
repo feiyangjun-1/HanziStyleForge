@@ -106,6 +106,26 @@ def run_codebook_selftest() -> None:
     assert near_off <= 2, f"without revival the codebook should collapse, {near_off}/64 survived"
     assert smallest_off < 1e-5, f"unselected codes should decay to zero, smallest {smallest_off:.2e}"
 
+    # An already-collapsed checkpoint must still snap safely, because the whole
+    # point of snapping is to move a latent onto a code some real glyph was
+    # assigned to, and the origin is not one. Reproduces a measured checkpoint:
+    # 34 live codes, the rest at the origin with a denormal cluster_size, which
+    # is why the test is against epsilon rather than zero.
+    collapsed = VectorQuantizerEMA(embeddings=64, dimension=8, decay=0.9)
+    collapsed.eval()
+    with torch.no_grad():
+        collapsed.codebook.zero_()
+        collapsed.cluster_size.fill_(1.401e-43)
+        collapsed.codebook[:4] = torch.randn(4, 8) * 7.0
+        collapsed.cluster_size[:4] = 100.0
+    torch.manual_seed(0)
+    latents = torch.randn(2048, 8).view(2048, 8, 1, 1)
+    snapped, chosen = collapsed.nearest(latents)
+    assert int(chosen.max()) < 4, "a dead code must never win the nearest-neighbour search"
+    assert float(snapped.view(2048, 8).norm(dim=1).median()) > 1.0, (
+        "snapping onto the origin collapses the decoder input to a constant field"
+    )
+
     # A fresh codebook seeds itself from the data rather than the unit sphere.
     torch.manual_seed(0)
     seeded = VectorQuantizerEMA(embeddings=32, dimension=8, decay=0.9)

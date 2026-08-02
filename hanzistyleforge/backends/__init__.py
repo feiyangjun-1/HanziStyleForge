@@ -20,7 +20,6 @@ from .base import (
     read_candidate_dir,
 )
 from .dir_backend import DirectoryBackend
-from .zi2zi_jit import Zi2ziJitBackend
 
 __all__ = [
     "BackendRequest",
@@ -30,7 +29,6 @@ __all__ = [
     "DirectoryBackend",
     "GenerationBackend",
     "GlyphRequest",
-    "Zi2ziJitBackend",
     "candidate_filename",
     "codepoint_from_filename",
     "normalize_candidate",

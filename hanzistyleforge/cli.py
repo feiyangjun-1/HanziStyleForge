@@ -278,12 +278,11 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default="config_months_12gb.json")
     parser.add_argument(
         "--backend",
-        choices=["native", "dir", "zi2zi-jit"],
+        choices=["native", "dir"],
         default=None,
         help=(
             "Override backend.name for this run. native is the built-in generation stack "
-            "and the default; dir reads an existing image directory; zi2zi-jit drives a "
-            "local zi2zi-JiT checkout."
+            "and the default; dir reads a directory of already generated images."
         ),
     )
     parser.add_argument("--version", action="version", version=__version__)

@@ -73,7 +73,7 @@ Static fonts are recommended. `target.ttf` should contain a TrueType `glyf` tabl
    request_safe_stop.bat
    ```
 
-8. Clear the stop marker before resuming:
+`run_months_resilient.bat` clears the stop marker on launch, so this is only needed when starting a run some other way:
 
    ```text
    clear_safe_stop.bat
@@ -112,6 +112,7 @@ HanziStyleForge Fusion is an independent implementation. The following projects 
 | Source | Ideas studied |
 |---|---|
 | [zi2zi](https://github.com/kaonashi-tyc/zi2zi) | Han glyph style transfer and content/style separation |
+| [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) | Multi-reference style conditioning and diffusion transformers |
 | [FontDiffuser](https://github.com/yeungchenwa/FontDiffuser) | Diffusion generation, multi-scale content aggregation, explicit style constraints |
 | [HanziGen](https://github.com/wangwenho/HanziGen) | VQ representations and conditional latent diffusion |
 | [VQ-Font](https://github.com/Yaomingshuai/VQ-Font) | Discrete font tokens and structure-aware enhancement |
@@ -121,58 +122,6 @@ HanziStyleForge Fusion is an independent implementation. The following projects 
 | [cjkvi/cjkvi-ids](https://github.com/cjkvi/cjkvi-ids) | Unicode IDS component structure and local-region hints |
 
 A citation indicates architectural reference only. It does not grant permission to copy upstream code, weights, data, or fonts. Check the current license and terms of every third-party artifact before use.
-
-[zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) is listed separately below, because it is more than an architectural reference: it can be used as an optional generation backend.
-
-## Optional generation backend: zi2zi-JiT
-
-The generation stage is pluggable. The default backend is this project's own Style Encoder → VQ → Diffusion → Refiner stack. As an alternative, generation can be delegated to [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT), a pixel-space diffusion transformer with pretrained checkpoints, while HanziStyleForge Fusion keeps everything downstream: candidate selection, IDS component checks, QA, refinement, outline conversion, and TTF building.
-
-Neither zi2zi-JiT's source code nor its checkpoints are bundled here. You clone the upstream repository and download the checkpoints yourself; the backend then invokes your local copy.
-
-### Usage
-
-The backend is selected by the `backend` block in `config.json`, and `--backend` overrides it for a single run:
-
-```text
-hanzistyleforge.py --backend=zi2zi-jit fusion-generate
-```
-
-Valid values are `native` (the default, this project's own generation stack), `zi2zi-jit`, and `dir`, which reads a directory of already-generated images — useful for feeding in a manual generation run, or for exercising the post-processing chain without depending on any generator.
-
-```json
-"backend": {
-  "name": "zi2zi-jit",
-  "candidate_count": 3,
-  "zi2zi_jit": {
-    "repo_dir": "D:/zi2zi-JiT",
-    "checkpoint": "D:/zi2zi-JiT/run/lora_target/checkpoint-last.pth",
-    "font_label": 0
-  }
-}
-```
-
-Leaving `python_executable` empty reuses the interpreter running HanziStyleForge: zi2zi-JiT's inference path needs only torch, numpy, opencv and einops, not the pinned set in its `environment.yaml`.
-
-### LoRA fine-tuning is required first
-
-**The published JiT-B/16 checkpoint is a pretraining artifact and cannot be used zero-shot.** Driving it directly on an unseen font drops strokes systematically. Every generation example in zi2zi-JiT's README uses a fine-tuned checkpoint.
-
-Build a dataset with `scripts/generate_font_dataset.py`, using your `ref.otf` as the source font — matching the content distribution used at inference matters more than matching pretraining. Then run `lora_single_gpu_finetune_jit.py`. Afterwards point `checkpoint` at the result and set `font_label` to `0`, because a single-font dataset is laid out as `001_<name>`. Leaving `font_label` unset uses the label-drop token, which is only meaningful for the base checkpoint.
-
-On Windows you also need `TORCHDYNAMO_DISABLE=1` (Triton has no Windows build), `PYTHONPATH` pointing at the repository root (scripts under `scripts/` get their own directory as `sys.path[0]`), `--num_workers 0` (DataLoader workers must pickle a dataset containing a lambda), and no `--online_eval` (it computes FID, and the PyPI torch-fidelity disagrees with the fork upstream uses).
-
-### Why the backend uses a separate topology gate
-
-The global `topology` thresholds are calibrated for the built-in generator, which is structure-locked to the reference and therefore tracks its skeleton closely. A backend performing genuine style transfer deviates by design, and the same thresholds reject all of its output — measured `topology_score` ran at a median of 0.14 against a 0.06 limit.
-
-`backend.topology` therefore relaxes the skeleton-similarity limits for non-native backends. **What it does not relax is component, hole and Euler delta**, which stay at zero and are what guarantees the generated glyph is the same character. In the same measurement their medians were already zero, so honest style transfer passes while a glyph that gained or lost a stroke is rejected and falls back to the reference.
-
-The confidence in `selection.csv` is calibrated against the same gate: it measures how far inside the gate a candidate sits, so a relaxed backend path scores lower than the native one by construction. `qa.low_confidence_threshold` is therefore configurable, defaulting to 0.75 for the native calibration. Measured over 600 glyphs the backend distribution runs p10=0.125, p50=0.258, p90=0.486, so the default would flag every glyph; `config_zi2zi_production.json` uses 0.12, flagging roughly the worst tenth.
-
-For the same reason, **a non-native backend skips the `refine` stage.** Long-run refinement searches for the candidate closest to the reference structure and gets there by blending towards the reference fallback. That purifies the built-in generator's noisy output; against style transfer it erases it, replacing 32 of 40 glyphs with reference forms in the measured run. Since `build` prefers `refined/selection.csv`, leaving it on would produce a font made almost entirely of reference outlines. Set `backend.run_refine=true` to force it anyway.
-
-> **Attribution requirement.** zi2zi-JiT's code is MIT licensed, but its "Font Artifact License Addendum" additionally requires attribution when you distribute a font product containing **more than 200 unique characters** built from its outputs. A normal run of this tool rebuilds far more than 200 characters, so if you generate with this backend, assume attribution applies: state "Created using zi2zi-JiT artifacts" and link to the upstream repository. This does not apply to fonts produced with the default backend. See `THIRD_PARTY_NOTICES.md`.
 
 ## Contributing
 

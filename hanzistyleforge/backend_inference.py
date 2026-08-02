@@ -360,7 +360,7 @@ def generate_with_backend(
 
     chosen_dir = ensure_dir(generated / "chosen")
     candidate_root = ensure_dir(generated / "backend_candidates")
-    style_pngs = _style_glyph_pngs(work, int(backend_cfg.get("zi2zi_jit", {}).get("style_pool_size", 64)))
+    style_pngs = _style_glyph_pngs(work, int(backend_cfg.get("style_pool_size", 64)))
     candidate_count = max(1, int(backend_cfg.get("candidate_count", 3)))
 
     request = BackendRequest(

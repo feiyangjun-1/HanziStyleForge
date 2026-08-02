@@ -15,7 +15,6 @@ from hanzistyleforge.backends import (
     CandidateGeometry,
     DirectoryBackend,
     GlyphRequest,
-    Zi2ziJitBackend,
     candidate_filename,
     codepoint_from_filename,
     normalize_candidate,
@@ -308,7 +307,6 @@ def run_backend_selftest() -> None:
         _check_backend_topology_override()
         _check_confidence_calibration()
         _check_selection_parallelism()
-        _check_zi2zi_backend(root, reference_dir)
 
 
 def _check_selection_parallelism() -> None:
@@ -457,100 +455,6 @@ def _check_backend_topology_override() -> None:
     assert int(metrics["component_delta"]) == 0
     assert validate_topology(metrics, merged)["hard_pass"]
     assert not validate_topology(metrics, cfg["topology"])["hard_pass"]
-
-
-def _check_zi2zi_backend(root: Path, reference_dir: Path) -> None:
-    """Cover the zi2zi-JiT backend paths that need no checkpoint.
-
-    Generation itself requires a multi-gigabyte model, so the self-test
-    exercises preflight diagnostics and the npz encoding instead: those are
-    what silently corrupt a run, whereas a broken subprocess call fails loudly
-    on the first chunk.
-    """
-
-    missing_repo = Zi2ziJitBackend(root / "no_repo", root / "no_checkpoint.pth")
-    try:
-        missing_repo.preflight()
-    except BackendUnavailable as exc:
-        assert "git clone" in str(exc)
-    else:
-        raise AssertionError("a missing zi2zi-JiT checkout must fail preflight")
-
-    fake_repo = root / "fake_repo"
-    fake_repo.mkdir()
-    try:
-        Zi2ziJitBackend(fake_repo, root / "no_checkpoint.pth").preflight()
-    except BackendUnavailable as exc:
-        assert "generate_chars.py is missing" in str(exc)
-    else:
-        raise AssertionError("a directory without generate_chars.py must fail preflight")
-
-    (fake_repo / "generate_chars.py").write_text("", encoding="utf-8")
-    try:
-        Zi2ziJitBackend(fake_repo, root / "no_checkpoint.pth").preflight()
-    except BackendUnavailable as exc:
-        assert "Google Drive" in str(exc)
-    else:
-        raise AssertionError("a missing checkpoint must fail preflight")
-
-    checkpoint = fake_repo / "weights.pth"
-    checkpoint.write_bytes(b"not a checkpoint")
-    try:
-        Zi2ziJitBackend(
-            fake_repo, checkpoint, python_executable=root / "no_python.exe"
-        ).preflight()
-    except BackendUnavailable as exc:
-        assert "does not exist" in str(exc)
-    else:
-        raise AssertionError("a missing interpreter must fail preflight")
-
-    backend = Zi2ziJitBackend(fake_repo, checkpoint, font_label=7, chunk_size=2)
-    # font_label is honoured without touching the checkpoint, so a LoRA
-    # fine-tuned run never pays for the probe.
-    assert backend.resolved_font_label() == 7
-
-    style_png = root / "style.png"
-    style = np.zeros((512, 512), dtype=np.float32)
-    style[120:400, 240:270] = 1.0
-    save_ink(style_png, style)
-
-    request = BackendRequest(
-        glyphs=(
-            GlyphRequest(0x4E00, reference_dir / "U+4E00.png", reference_dir / "U+4E00.png"),
-            GlyphRequest(0x20000, reference_dir / "U+4E00.png", reference_dir / "U+4E00.png"),
-        ),
-        style_glyph_pngs={0x4E8C: style_png, 0x4E09: style_png},
-        style_font=Path("fonts/target.ttf"),
-        candidate_count=1,
-        output_root=root / "zi2zi_out",
-        work_dir=root,
-    )
-    npz_path = root / "chunk.npz"
-    backend._write_chunk_npz(npz_path, request.glyphs, [style_png], 1000, 0)
-    with np.load(npz_path) as payload:
-        assert payload["content_images"].shape == (2, 3, 256, 256)
-        assert payload["content_images"].dtype == np.uint8
-        assert payload["style_images"].shape == (2, 3, 128, 128)
-        # generate_chars.py reads font_labels/unicode_labels to name outputs,
-        # and LabelEmbedder has no character embedding at all.
-        assert payload["font_labels"].tolist() == [1000, 1000]
-        assert payload["char_labels"].tolist() == [0, 0]
-        assert payload["unicode_labels"].tolist() == [0x4E00, 0x20000]
-
-    empty_style = BackendRequest(
-        glyphs=request.glyphs,
-        style_glyph_pngs={},
-        style_font=request.style_font,
-        candidate_count=1,
-        output_root=request.output_root,
-        work_dir=root,
-    )
-    try:
-        backend._style_pool(empty_style)
-    except BackendUnavailable as exc:
-        assert "prepare" in str(exc)
-    else:
-        raise AssertionError("an empty style pool must be rejected")
 
 
 def main() -> None:

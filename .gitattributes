@@ -1,2 +1,10 @@
-# Auto detect text files and perform LF normalization
+# Shell scripts must keep LF endings even when checked out on Windows.
+# A CRLF shebang makes them fail on Linux and macOS with
+#   bad interpreter: /usr/bin/env bash^M
+*.sh text eol=lf
+
+# Batch files are the mirror case: they need CRLF on Windows.
+*.bat text eol=crlf
+
+# Let git decide for everything else it detects as text.
 * text=auto

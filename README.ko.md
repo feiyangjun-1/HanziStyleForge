@@ -1,129 +1,161 @@
-[简体中文](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [English](README.en.md)
+[简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 # HanziStyleForge Fusion
 
-Windows용 실험적 한자 글꼴 재구성 도구입니다. `target.ttf`에서 글꼴 스타일을 학습하고 `ref.otf`에서 한자 구조를 가져와 설치 가능한 TTF 글꼴을 생성합니다.
+**한 글꼴의 스타일로, 다른 글꼴에 없는 한자를 채웁니다.**
 
-> 장시간 무인 실행을 위해 체크포인트 재개, 안전 중지, 자동 재시도를 지원합니다.
+몇천 자만 수록된 마음에 드는 글꼴을 이만 자 규모로 넓히고 싶을 때. 이 도구는 그 글꼴의 획이 어떻게 생겼는지 학습한 뒤, 글자 수가 충분한 참조 글꼴의 자형을 따라 빠진 글자를 하나씩 그려내고, 바로 설치할 수 있는 `.ttf`로 묶어 줍니다.
 
-## 주요 기능
+> 실험적인 도구입니다. 한 번 실행에 며칠에서 몇 주가 걸립니다. 언제 중단해도 다음에 이어서 진행합니다.
 
-- `fonts/target.ttf`에서 전체 및 지역 글꼴 스타일을 학습합니다.
-- `refs/ref.otf`의 기본 글리프가 포함하는 모든 한자를 재구성합니다.
-- 중국 본토, 대만, 홍콩, 일본, 한국등 다양한 참조 글꼴을 사용할 수 있습니다.
-- 대상 글꼴의 라틴 문자, 숫자, 기호, 가나, 한글 및 주요 OpenType 데이터를 가능한 한 유지합니다.
-- 학습, 생성, 후보 선택, QA, 벡터화, 글꼴 빌드를 자동화합니다.
+---
+
+## 글꼴 두 개를 준비합니다
+
+| 파일 | 역할 | 설명 |
+|---|---|---|
+| `fonts/target.ttf` | **스타일** | 마음에 드는 글꼴. 획의 생김새만 학습합니다 |
+| `refs/ref.otf` | **자형** | 글자 수가 충분한 글꼴. 그 자형 구조를 따릅니다 |
+
+예를 들어 `target.ttf`에 손글씨풍 글꼴을, `refs/ref.otf`에 본고딕을 넣으면 본고딕 자형으로 그려진 손글씨풍 글꼴이 나옵니다.
+
+**자형 기준은 `ref.otf`가 정합니다.** 중국 본토 자형을 원하면 본토 참조 글꼴을, 대만·홍콩·일본·한국 자형을 원하면 해당 글꼴을 넣으십시오. 프로그램이 어느 쪽이 "더 옳은지" 스스로 판단하지 않습니다.
+
+### 글꼴 파일 조건
+
+- 정적 글꼴. **가변 글꼴, TTC, OTC는 지원하지 않습니다**
+- `target.ttf`는 TrueType(`glyf` 테이블 포함)이어야 합니다
+- `ref.otf`는 TrueType 또는 CFF/OTF 모두 가능합니다
+
+---
+
+## 하드웨어
+
+**NVIDIA GPU가 반드시 필요합니다.** 학습이 이 프로젝트의 본체이며 CUDA를 사용합니다.
+
+| 플랫폼 | 학습 가능 여부 |
+|---|---|
+| Windows + NVIDIA | 가능 |
+| Linux + NVIDIA | 가능 |
+| macOS | **불가.** Mac에는 NVIDIA GPU가 없고 Apple MPS도 지원하지 않습니다. CPU만으로는 현실적인 속도가 나오지 않습니다 |
+| 외장 GPU가 없는 Linux / Windows | 위와 동일 |
+
+그 밖에 Python 3.10-3.14, 여유 디스크 150 GB 이상을 권장합니다. VRAM은 12 GB면 충분하며, 기본 설정이 그에 맞춰져 있습니다.
+
+Mac에서도 설치, 자체 검사, 글꼴 확인, 이미 만들어 둔 글리프 이미지로 글꼴 빌드는 가능합니다. 학습은 NVIDIA GPU가 있는 기기에서 하십시오.
+
+---
+
+## 시작하기
+
+### Windows
+
+다음 네 개를 순서대로 더블클릭합니다.
+
+| 단계 | 더블클릭 | 하는 일 |
+|---|---|---|
+| 1 | `install_cuda130.bat` | 환경 설치. 처음 한 번만 |
+| 2 | — | 글꼴 두 개를 `fonts\`와 `refs\`에 넣기 |
+| 3 | `verify_project.bat` | 준비 상태 확인 |
+| 4 | `run_months_resilient.bat` | 실행 시작 |
+
+중간에 멈추려면 `request_safe_stop.bat`을 더블클릭하십시오. 다음 체크포인트에서 안전하게 종료합니다. `run_months_resilient.bat`을 다시 더블클릭하면 이어서 진행합니다.
+
+### Linux와 macOS
+
+프로젝트 폴더에서 터미널을 엽니다.
+
+```bash
+./install.sh
+```
+
+글꼴 두 개를 `fonts/`와 `refs/`에 넣은 다음:
+
+```bash
+./verify.sh
+./run.sh
+```
+
+중간에 멈추려면:
+
+```bash
+./stop.sh
+```
+
+`./run.sh`를 다시 실행하면 체크포인트부터 이어집니다.
+
+> `Permission denied`가 나오면 먼저 `chmod +x *.sh`를 실행하십시오.
+
+---
+
+## 결과물 위치
+
+```text
+build/target-HanziStyleForge-Fusion.ttf               ← 완성된 글꼴
+build/target-HanziStyleForge-Fusion.ttf.report.json   ← 빌드 보고서
+work_hanzistyleforge_fusion_months/qa/index.html      ← QA 보고서. 브라우저로 여십시오
+```
+
+**글꼴을 설치하기 전에 QA 보고서를 확인하십시오.** 참조·목표·생성 결과를 글자마다 나란히 보여 주므로, 잘 생성된 글자와 참조 자형으로 대체된 글자를 구분할 수 있습니다.
+
+학습 데이터, 체크포인트, 생성 진행 상태는 `work_hanzistyleforge_fusion_months/`에 저장되며 수십 GB에 이릅니다. **실행 중에는 삭제하지 마십시오.**
+
+---
+
+## 중간에 멈추면
+
+문제없습니다. 각 단계와 생성된 각 글자가 체크포인트로 저장되므로, 같은 명령을 다시 실행하면 멈춘 지점부터 이어집니다.
+
+정전, 크래시, Ctrl+C 모두 마찬가지입니다. `run_months_resilient.bat`과 `run.sh`는 오류 후 자동으로 재시도하며, 20회 연속 실패했을 때만 중단합니다. 거기까지 갔다면 일시적인 문제가 아니라 실제 결함이기 때문입니다.
+
+---
+
+## 자주 묻는 질문
+
+**얼마나 걸립니까?**
+글자 수와 GPU에 따라 며칠에서 몇 주입니다. 12 GB 노트북 GPU에 기본 설정이면 주 단위로 잡으십시오.
+
+**일부 글자만 처리할 수 있습니까?**
+가능합니다. 설정에서 `scope.mode`를 `chars_file`로 바꾸고 `scope.extra_chars_file`이 한 줄에 한 글자(또는 `U+4E00` 형식) 목록을 가리키게 하십시오. 먼저 몇백 자로 시험해 보는 편이 좋습니다.
+
+**자형 기준에서 벗어난 글자가 나오지 않습니까?**
+구조 게이트가 있습니다. 생성된 글자의 연결 요소 수나 구멍 수가 참조와 어긋나면 거부하고 참조 자형을 사용합니다. 획이 늘거나 줄어든 잘못된 글자는 막을 수 있지만, 대신 일부 글자는 목표 스타일이 아니라 참조 쪽 모습으로 남습니다.
+
+**한자가 아닌 부분도 바뀝니까?**
+아닙니다. 라틴 문자, 숫자, 문장 부호, 가나, 한글, 그리고 OpenType 레이아웃·힌팅 테이블은 `target.ttf`에서 그대로 이어받고 빌드 시 바이트 단위로 검증합니다.
+
+**`requires CUDA, but torch.cuda.is_available() is False`가 나옵니다.**
+사용 가능한 NVIDIA GPU를 찾지 못했습니다. 드라이버를 업데이트하거나 CUDA 빌드 PyTorch가 설치되었는지 확인하십시오.
+
+**`does not support training.device='mps'`가 나옵니다.**
+Apple GPU는 지원하지 않습니다. 위의 하드웨어 항목을 참고하십시오.
+
+---
+
+## 사용 전 확인 사항
+
+- 전체 과정에는 며칠, 몇 주 또는 그 이상이 걸릴 수 있습니다
+- 이 저장소에는 글꼴, 사전 학습 가중치, 타사 데이터셋이 포함되지 않습니다
+- **생성된 글꼴에는 `target.ttf`와 `ref.otf`의 라이선스가 모두 적용될 수 있습니다.** 학습·수정·배포 권한이 있는 글꼴만 사용하십시오
+- 실험적인 소프트웨어입니다. 배포 전에 QA 보고서를 확인하고 직접 테스트하십시오
+
+참고 문헌과 라이선스는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 보십시오.
+
+---
 
 ## 작동 방식
 
 ```text
-target.ttf: 스타일
-        +
-ref.otf: 한자 구조와 범위
-        ↓
-Style Encoder → VQ → Diffusion → Refiner / Retrieval / IDS
-        ↓
-후보 선택 → QA → 윤곽선 변환 → TTF
+target.ttf(스타일)   ref.otf(자형 구조)
+        └──────┬──────┘
+               ↓
+   스타일 인코딩 → VQ 획 코드북 → 잠재 확산 → 정밀화
+               ↓
+   다중 후보 → 구조 게이트 → QA → 윤곽선 벡터화 → TTF
 ```
 
-프로그램은 어느 지역 자형이 더 올바른지 판단하지 않습니다. 최종 한자 구조는 `ref.otf`의 기본 Unicode `cmap` 글리프를 따릅니다.
-
-## 요구 사항
-
-- Windows 11 64-bit
-- CUDA를 지원하는 NVIDIA GPU
-- Python 3.10 이상
-- 최소 150 GB의 여유 디스크 공간 권장
-
-입력 글꼴:
-
-```text
-fonts\target.ttf
-refs\ref.otf
-```
-
-정적 글꼴 사용을 권장합니다. `target.ttf`에는 TrueType `glyf` 테이블이 있어야 합니다. `ref.otf`는 정적 TrueType 또는 정적 CFF OTF를 사용할 수 있습니다. 가변 글꼴, TTC, OTC는 지원하지 않습니다.
-
-## 빠른 시작
-
-1. 저장소를 다운로드하거나 복제합니다.
-2. 스타일 원본 글꼴을 `fonts\target.ttf`에 넣습니다.
-3. 구조 참조 글꼴을 `refs\ref.otf`에 넣습니다.
-4. 환경을 설치합니다.
-
-   ```text
-   install_cuda130.bat
-   ```
-
-5. 프로젝트를 확인합니다.
-
-   ```text
-   verify_project.bat
-   ```
-
-6. 전체 파이프라인을 시작하거나 재개합니다.
-
-   ```text
-   run_months_resilient.bat
-   ```
-
-
-7. 안전 중지 요청:
-
-   ```text
-   request_safe_stop.bat
-   ```
-
-`run_months_resilient.bat`은 실행 시 중지 표시를 자동으로 지우므로, 다른 방법으로 실행할 때만 필요합니다.
-
-   ```text
-   clear_safe_stop.bat
-   ```
-
-## 출력
-
-주요 출력:
-
-```text
-build\target-HanziStyleForge-Fusion.ttf
-build\target-HanziStyleForge-Fusion.ttf.report.json
-work_hanzistyleforge_fusion_months\qa\index.html
-```
-
-학습 데이터, 체크포인트, 생성 진행 상태는 다음 폴더에 저장됩니다.
-
-```text
-work_hanzistyleforge_fusion_months\
-```
-
-학습 중에는 이 폴더를 삭제하지 마십시오.
-
-## 사용 전 확인 사항
-
-- 전체 실행에는 며칠, 몇 주 또는 그 이상이 걸릴 수 있습니다.
-- 저장소에는 글꼴 파일, 사전 학습 가중치 또는 타사 글꼴 데이터셋이 포함되지 않습니다.
-- 생성 글꼴에는 `target.ttf`와 `ref.otf`의 라이선스가 모두 적용될 수 있습니다.
-- 학습, 수정, 재배포 권한이 있는 글꼴만 사용하십시오.
-- 이 프로젝트는 실험적입니다. 배포 전에 QA 페이지와 최종 글꼴을 직접 확인하십시오.
-
-## 연구 및 참고 자료
-
-HanziStyleForge Fusion은 독립 구현입니다. 다음 프로젝트와 논문은 아키텍처 설계에 참고되었습니다. 해당 프로젝트의 소스 코드, 사전 학습 가중치, 글꼴 데이터셋은 이 저장소에 포함되지 않습니다.
-
-| 출처 | 참고한 방향 |
-|---|---|
-| [zi2zi](https://github.com/kaonashi-tyc/zi2zi) | 한자 스타일 변환, 내용과 스타일 분리 |
-| [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) | 다중 참조 스타일 조건, 확산 Transformer |
-| [FontDiffuser](https://github.com/yeungchenwa/FontDiffuser) | 확산 생성, 다중 스케일 내용 집계, 명시적 스타일 제약 |
-| [HanziGen](https://github.com/wangwenho/HanziGen) | VQ 표현과 조건부 잠재 확산 |
-| [VQ-Font](https://github.com/Yaomingshuai/VQ-Font) | 이산 글꼴 token과 구조 인식 강화 |
-| [LF-Font / MX-Font](https://github.com/clovaai/fewshot-font-generation) | 지역 부품 스타일, 인자 분해, 다중 전문가 |
-| [DeepVecFont-v2](https://github.com/yizhiwang96/deepvecfont-v2) | Transformer 벡터 시퀀스와 윤곽선 보정 |
-| [Efficient and Scalable Chinese Vector Font Generation via Component Composition](https://arxiv.org/abs/2404.06779) | 부품 영역 변환과 대규모 조합 |
-| [cjkvi/cjkvi-ids](https://github.com/cjkvi/cjkvi-ids) | Unicode IDS 부품 구조와 지역 힌트 |
-
-인용은 방법상의 참고만 의미하며, 상위 프로젝트의 코드, 가중치, 데이터 또는 글꼴을 복사할 권한을 부여하지 않습니다. 타사 자료를 사용하기 전에 현재 라이선스와 이용 약관을 확인하십시오.
+스타일은 `target.ttf`에서만, 구조는 `ref.otf`에서만 가져옵니다. 두 데이터 경로는 분리되어 있으며 실행 시 그 분리를 검증합니다.
 
 ## 기여
 
-Issue와 Pull Request를 환영합니다. 타사 코드, 데이터 또는 모델을 추가할 때는 출처와 라이선스 정보를 함께 명시하십시오.
+Issue와 Pull Request를 환영합니다. 타사 코드, 데이터, 모델을 추가할 때는 출처와 라이선스를 함께 명시하십시오.

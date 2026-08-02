@@ -14,6 +14,7 @@ import torch
 from PIL import Image
 from tqdm import tqdm
 
+from .runtime import resolve_device
 from .component_atlas import ComponentAtlas, render_component_candidate
 from .contract import validate_data_flow_contract
 from .dataset import expand_proxy_channels
@@ -83,10 +84,8 @@ FUSION_SELECTION_FIELDS = SELECTION_FIELDS + [
 
 
 def _device(cfg: dict[str, Any]) -> torch.device:
-    requested = str(cfg.get("training", {}).get("device", "cuda"))
-    if requested.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError("Fusion inference requires CUDA, but torch.cuda.is_available() is False")
-    return torch.device(requested if requested.startswith("cuda") else "cpu")
+    device = resolve_device(cfg, "Fusion inference")
+    return device
 
 
 def _autocast(device: torch.device, enabled: bool):

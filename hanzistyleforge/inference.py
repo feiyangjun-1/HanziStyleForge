@@ -14,6 +14,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from .runtime import resolve_device
 from .dataset import ReferenceProxyDataset
 from .config import CHECKPOINT_FORMAT_VERSION
 from .contract import validate_data_flow_contract
@@ -93,12 +94,10 @@ SELECTION_FIELDS = [
 
 
 def _device(cfg: dict[str, Any]) -> torch.device:
-    requested = str(cfg["training"].get("device", "cuda"))
-    if requested.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError("Inference requires CUDA, but torch.cuda.is_available() is False.")
-    if not requested.startswith("cuda"):
+    device = resolve_device(cfg, "Inference")
+    if device.type == "cpu":
         torch.set_num_threads(max(1, min(4, int(cfg["training"].get("cpu_threads", 4)))))
-    return torch.device(requested if requested.startswith("cuda") else "cpu")
+    return device
 
 
 def _style_profile_for_complexity(profiles: dict[str, Any], complexity: float) -> dict[str, Any]:

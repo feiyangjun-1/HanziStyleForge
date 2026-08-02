@@ -147,6 +147,58 @@ def run_codebook_selftest() -> None:
     assert set(seeded.state_dict()) == set(VectorQuantizerEMA(embeddings=32, dimension=8).state_dict())
 
 
+def run_training_stage_name_selftest() -> None:
+    """Every training stage must resolve all its names before it runs.
+
+    train_fusion_refiner referenced style_bank without ever loading it, so it
+    raised NameError the moment it was reached. Nothing catches that earlier:
+    the refiner is the last stage, so the failure only appears after the style
+    encoder, direct baseline, VQ and diffusion have all finished training. On a
+    full-size run that is weeks of compute before the crash.
+    """
+
+    import ast
+    import builtins
+    import inspect
+
+    from hanzistyleforge import fusion_training
+
+    source = inspect.getsource(fusion_training)
+    tree = ast.parse(source)
+    module_level = set(dir(builtins))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            module_level |= {alias.asname or alias.name.split(".")[0] for alias in node.names}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            module_level.add(node.name)
+        elif isinstance(node, ast.Assign):
+            module_level |= {t.id for t in node.targets if isinstance(t, ast.Name)}
+
+    def bound_names(function: ast.FunctionDef) -> set[str]:
+        names = {arg.arg for arg in ast.walk(function) if isinstance(arg, ast.arg)}
+        for node in ast.walk(function):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                names.add(node.id)
+            elif isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node is not function:
+                names.add(node.name)
+            elif isinstance(node, ast.alias):
+                names.add(node.asname or node.name.split(".")[0])
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                names.add(node.name)
+        return names
+
+    # Only top-level functions: a nested one legitimately reads its enclosing
+    # scope, which this cannot see.
+    undefined: list[str] = []
+    for function in [n for n in tree.body if isinstance(n, ast.FunctionDef)]:
+        available = module_level | bound_names(function)
+        for node in ast.walk(function):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id not in available:
+                undefined.append(f"{function.name} reads undefined {node.id!r} at line {node.lineno}")
+    assert not undefined, "undefined names in fusion_training:\n  " + "\n  ".join(sorted(set(undefined)))
+
+
 def run_ema_resume_selftest() -> None:
     """A restored EMA must survive the device the checkpoint was read onto.
 
@@ -859,6 +911,7 @@ def main() -> None:
     assert score.ndim == 4 and features
     run_fusion_selftest()
     run_codebook_selftest()
+    run_training_stage_name_selftest()
     run_ema_resume_selftest()
     run_backend_selftest()
     print("HanziStyleForge Fusion self-test: OK")

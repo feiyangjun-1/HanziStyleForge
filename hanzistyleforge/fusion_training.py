@@ -1994,6 +1994,13 @@ def train_fusion_refiner(cfg: dict[str, Any]) -> dict[str, Any]:
     style_encoder, style_spec = load_style_encoder(cfg, device)
     for parameter in style_encoder.parameters():
         parameter.requires_grad_(False)
+    # The refiner datasets are grouped by the same style bank the diffusion
+    # stage uses, and group_count is written into style_bank.pt when the bank is
+    # built rather than being a configuration value. Loading it here is what the
+    # diffusion stage already does; without it this function referenced an
+    # undefined name and died the moment it was reached, which is after every
+    # other stage has finished training.
+    style_bank = load_style_bank(cfg, device)
     model = _refiner_model(cfg).to(device)
     model_spec = {
         "base_channels": int(ref_cfg.get("base_channels", 32)),

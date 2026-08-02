@@ -357,13 +357,14 @@
         }
       ],
       "loss_profile": "fast_balanced_v1",
-      "channels_last": true,
+      "channels_last": false,
       "fused_optimizer": false,
       "validation_batches": 32,
       "early_stopping": {
         "enabled": true,
         "minimum_relative_improvement": 0.001
-      }
+      },
+      "codebook_revive_threshold": 1.0
     },
     "direct_baseline": {
       "enabled": true,
@@ -428,8 +429,8 @@
           "name": "latent256",
           "size": 256,
           "epochs": 120,
-          "batch_size": 3,
-          "gradient_accumulation": 2,
+          "batch_size": 6,
+          "gradient_accumulation": 1,
           "learning_rate": 0.00016,
           "minimum_learning_rate": 7e-07,
           "patience": 14,
@@ -439,8 +440,8 @@
           "name": "latent384",
           "size": 384,
           "epochs": 60,
-          "batch_size": 2,
-          "gradient_accumulation": 2,
+          "batch_size": 4,
+          "gradient_accumulation": 1,
           "learning_rate": 5e-05,
           "minimum_learning_rate": 3.5e-07,
           "patience": 10,
@@ -450,15 +451,16 @@
           "name": "latent512",
           "size": 512,
           "epochs": 30,
-          "batch_size": 1,
-          "gradient_accumulation": 4,
+          "batch_size": 4,
+          "gradient_accumulation": 1,
           "learning_rate": 1.5e-05,
           "minimum_learning_rate": 2e-07,
           "patience": 7,
           "minimum_improvement": 6e-06
         }
       ],
-      "loss_profile": "fast_balanced_v1"
+      "loss_profile": "fast_balanced_v1",
+      "channels_last": true
     },
     "purification": {
       "enabled": true,

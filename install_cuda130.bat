@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-title HanziStyleForge Fusion 2.2 - Installer
+title HanziStyleForge Fusion - Installer
 
 echo [1/7] Checking Python...
 where py >nul 2>nul
@@ -30,7 +30,7 @@ if errorlevel 1 goto :failed
 
 echo [5/7] Installing official PyTorch CUDA 13.0 wheels...
 %PY% -m pip uninstall -y torch torchvision torchaudio >nul 2>nul
-%PY% -m pip install torch==2.12.1 torchvision==0.27.1 --index-url https://download.pytorch.org/whl/cu130
+%PY% -m pip install torch==2.12.1 --index-url https://download.pytorch.org/whl/cu130
 if errorlevel 1 goto :fallback_cuda128
 %PY% -c "import torch; print('PyTorch:',torch.__version__); print('CUDA runtime:',torch.version.cuda); print('CUDA available:',torch.cuda.is_available()); print('GPU:',torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NONE'); raise SystemExit(0 if torch.cuda.is_available() else 3)"
 if errorlevel 1 goto :fallback_cuda128
@@ -40,7 +40,7 @@ goto :selftest
 echo CUDA 13.0 installation or verification failed.
 echo Falling back to the official PyTorch 2.11 CUDA 12.8 build...
 %PY% -m pip uninstall -y torch torchvision torchaudio >nul 2>nul
-%PY% -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+%PY% -m pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
 if errorlevel 1 goto :failed
 %PY% -c "import torch; print('PyTorch:',torch.__version__); print('CUDA runtime:',torch.version.cuda); print('CUDA available:',torch.cuda.is_available()); print('GPU:',torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NONE'); raise SystemExit(0 if torch.cuda.is_available() else 3)"
 if errorlevel 1 goto :cuda_failed

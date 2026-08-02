@@ -12,15 +12,15 @@ echo ============================================================
 echo HanziStyleForge Fusion months run - attempt !ATTEMPT!
 echo All major stages and every generated glyph are checkpointed.
 echo ============================================================
-.venv\Scripts\python.exe hanzistyleforge.py --config config_fusion_months_12gb.json fusion-auto-months
+.venv\Scripts\python.exe hanzistyleforge.py --config config_months_12gb.json fusion-auto-months
 set RC=!errorlevel!
 if !RC! EQU 0 goto :done
 if !RC! EQU 75 goto :safe_stopped
 if !RC! EQU 76 goto :style_collapse
 if !RC! EQU 130 goto :user_stopped
-if !ATTEMPT! GEQ 9999 goto :failed
+if !ATTEMPT! GEQ 20 goto :failed
 echo.
-echo Process exited with code !RC!. Retrying in 60 seconds...
+echo Process exited with code !RC!. Retrying in 60 seconds (attempt !ATTEMPT! of 20)...
 timeout /t 60 /nobreak >nul
 goto :restart
 :done
@@ -50,6 +50,8 @@ echo Run install_cuda130.bat first.
 pause
 exit /b 1
 :failed
-echo Retry limit reached. Correct the persistent error, then run this file again.
+echo Twenty consecutive failures. This is a persistent error rather than a
+echo transient one, so retrying further would only repeat it. Correct the
+echo cause shown above, then run this file again.
 pause
 exit /b 1

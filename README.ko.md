@@ -74,7 +74,7 @@ refs\ref.otf
    request_safe_stop.bat
    ```
 
-8. 재개하기 전에 중지 표시를 지웁니다.
+`run_months_resilient.bat`은 실행 시 중지 표시를 자동으로 지우므로, 다른 방법으로 실행할 때만 필요합니다.
 
    ```text
    clear_safe_stop.bat
@@ -113,6 +113,7 @@ HanziStyleForge Fusion은 독립 구현입니다. 다음 프로젝트와 논문�
 | 출처 | 참고한 방향 |
 |---|---|
 | [zi2zi](https://github.com/kaonashi-tyc/zi2zi) | 한자 스타일 변환, 내용과 스타일 분리 |
+| [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) | 다중 참조 스타일 조건, 확산 Transformer |
 | [FontDiffuser](https://github.com/yeungchenwa/FontDiffuser) | 확산 생성, 다중 스케일 내용 집계, 명시적 스타일 제약 |
 | [HanziGen](https://github.com/wangwenho/HanziGen) | VQ 표현과 조건부 잠재 확산 |
 | [VQ-Font](https://github.com/Yaomingshuai/VQ-Font) | 이산 글꼴 token과 구조 인식 강화 |
@@ -122,58 +123,6 @@ HanziStyleForge Fusion은 독립 구현입니다. 다음 프로젝트와 논문�
 | [cjkvi/cjkvi-ids](https://github.com/cjkvi/cjkvi-ids) | Unicode IDS 부품 구조와 지역 힌트 |
 
 인용은 방법상의 참고만 의미하며, 상위 프로젝트의 코드, 가중치, 데이터 또는 글꼴을 복사할 권한을 부여하지 않습니다. 타사 자료를 사용하기 전에 현재 라이선스와 이용 약관을 확인하십시오.
-
-[zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT)는 아래에 별도로 기재합니다. 아키텍처 참고를 넘어 선택적 생성 백엔드로 사용할 수 있기 때문입니다.
-
-## 선택적 생성 백엔드: zi2zi-JiT
-
-생성 단계는 교체 가능합니다. 기본 백엔드는 이 프로젝트가 자체 구현한 Style Encoder → VQ → Diffusion → Refiner입니다. 대안으로 생성을 [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT)(사전 학습 가중치를 제공하는 픽셀 공간 확산 Transformer)에 위임할 수 있습니다. 이때도 후보 선별, IDS 부품 검증, QA, 정밀화, 윤곽선 변환, TTF 빌드 등 하위 공정은 모두 HanziStyleForge Fusion이 담당합니다.
-
-zi2zi-JiT의 소스 코드와 가중치는 이 저장소에 포함되어 있지 않습니다. 상위 저장소 복제와 가중치 다운로드는 직접 하셔야 하며, 백엔드는 로컬 사본을 호출합니다.
-
-### 사용법
-
-백엔드는 `config.json`의 `backend` 블록에서 선택하며, `--backend`로 한 번만 덮어쓸 수 있습니다.
-
-```text
-hanzistyleforge.py --backend=zi2zi-jit fusion-generate
-```
-
-사용 가능한 값은 `native`(기본값, 이 프로젝트 자체 생성 스택), `zi2zi-jit`, 그리고 이미 생성된 이미지 디렉터리를 읽는 `dir`입니다. `dir`은 수동 생성 결과를 이어 붙이거나, 생성기에 의존하지 않고 후처리 공정만 검증할 때 유용합니다.
-
-```json
-"backend": {
-  "name": "zi2zi-jit",
-  "candidate_count": 3,
-  "zi2zi_jit": {
-    "repo_dir": "D:/zi2zi-JiT",
-    "checkpoint": "D:/zi2zi-JiT/run/lora_target/checkpoint-last.pth",
-    "font_label": 0
-  }
-}
-```
-
-`python_executable`을 비워 두면 HanziStyleForge를 실행 중인 인터프리터를 재사용합니다. zi2zi-JiT의 추론 경로에는 torch, numpy, opencv, einops만 필요하며 `environment.yaml`에 고정된 구성은 필요하지 않습니다.
-
-### LoRA 미세 조정이 선행되어야 합니다
-
-**공개된 JiT-B/16 가중치는 사전 학습 산출물이며 제로샷으로 사용할 수 없습니다.** 처음 보는 글꼴에 그대로 적용하면 획이 체계적으로 누락됩니다. zi2zi-JiT README의 생성 예시는 모두 미세 조정된 가중치를 사용합니다.
-
-`scripts/generate_font_dataset.py`로 데이터셋을 만들되 소스 글꼴은 추론 시 사용할 `ref.otf`와 동일하게 지정하십시오. 사전 학습에 맞추는 것보다 추론 시 내용 분포에 맞추는 것이 더 중요합니다. 이어서 `lora_single_gpu_finetune_jit.py`를 실행하고, 결과 가중치를 `checkpoint`에 지정한 뒤 `font_label`을 `0`으로 설정합니다(단일 글꼴 데이터셋은 `001_<name>`으로 배치되기 때문입니다). `font_label`을 비워 두면 label-drop 토큰을 사용하는데, 이는 기본 가중치에서만 의미가 있습니다.
-
-Windows에서는 추가로 `TORCHDYNAMO_DISABLE=1`(Triton의 Windows 빌드가 없음), 저장소 루트를 가리키는 `PYTHONPATH`(`scripts/` 아래 스크립트는 자기 디렉터리가 `sys.path[0]`이 됨), `--num_workers 0`(DataLoader 워커가 lambda를 포함한 dataset을 pickle해야 함), `--online_eval` 미사용(FID를 계산하는데 PyPI의 torch-fidelity가 상위 프로젝트가 쓰는 fork와 API가 다름)이 필요합니다.
-
-### 백엔드에 별도의 토폴로지 기준을 두는 이유
-
-전역 `topology` 임계값은 내장 생성기에 맞춰 보정되어 있습니다. 내장 생성기는 참조에 structure-lock되므로 그 골격을 매우 근접하게 따라갑니다. 실제 스타일 변환을 수행하는 백엔드는 설계상 그로부터 벗어나므로, 같은 임계값을 적용하면 모든 출력이 거부됩니다(실측 `topology_score` 중앙값 0.14, 상한 0.06).
-
-그래서 `backend.topology`는 비 native 백엔드에 한해 골격 유사도 상한만 완화합니다. **완화하지 않는 것은 연결 요소, 구멍, 오일러 수의 차이**이며, 이 값들은 0으로 유지되어 생성된 글자가 같은 문자임을 보장합니다. 같은 실측에서 이들의 중앙값은 이미 0이었으므로 정상적인 스타일 변환은 통과하고, 획이 늘거나 줄어든 글자는 거부되어 참조로 대체됩니다.
-
-`selection.csv`의 신뢰도도 같은 기준으로 보정됩니다. 후보가 기준 안쪽에 얼마나 여유를 두고 있는지를 나타내므로, 완화된 백엔드 경로의 값은 구조적으로 native 경로보다 낮습니다. 그래서 QA가 낮은 신뢰도로 판정하는 임계값 `qa.low_confidence_threshold`를 설정 가능하게 했습니다(기본값 0.75는 native 보정 기준). 600자 실측에서 백엔드 분포는 p10=0.125, p50=0.258, p90=0.486이라 기본값으로는 모든 글자가 표시됩니다. `config_zi2zi_production.json`에서는 0.12를 사용해 가장 나쁜 약 10%만 표시합니다.
-
-같은 이유로 **비 native 백엔드는 `refine` 단계를 건너뜁니다.** 장기 정밀화는 참조 구조에 가장 가까운 후보를 탐색하며, 참조 대체본과 혼합하는 방식으로 그 목표에 도달합니다. 내장 생성기의 잡음 섞인 출력에는 정제가 되지만 스타일 변환에는 소거로 작용하여, 실측에서 40자 중 32자가 참조 자형으로 교체되었습니다. `build`는 `refined/selection.csv`를 우선하므로, 켜 둔 채로 두면 거의 전부 참조 윤곽으로 이루어진 글꼴이 만들어집니다. 굳이 실행하려면 `backend.run_refine=true`로 설정하십시오.
-
-> **저작자 표시 의무.** zi2zi-JiT의 코드는 MIT 라이선스이지만, "Font Artifact License Addendum"이 산출물에 추가 조건을 부과합니다. 그 출력으로 만든 문자가 **200자를 초과하는** 글꼴 제품을 배포하는 경우 출처를 표시해야 합니다. 이 도구의 일반적인 실행은 200자를 크게 넘으므로, 이 백엔드를 사용했다면 표시가 필요하다고 가정하십시오. "Created using zi2zi-JiT artifacts"를 명시하고 상위 저장소 링크를 첨부합니다. 기본 백엔드로 생성한 글꼴에는 적용되지 않습니다. 자세한 내용은 `THIRD_PARTY_NOTICES.md`를 참조하십시오.
 
 ## 기여
 

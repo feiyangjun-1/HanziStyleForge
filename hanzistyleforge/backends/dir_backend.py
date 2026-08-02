@@ -63,7 +63,7 @@ class DirectoryBackend:
                 "These candidate directories contain no file whose name carries a "
                 "codepoint:\n  "
                 + listed
-                + "\nImages must be named U+XXXX.png (zi2zi-JiT's 0000_U+XXXX.png is also accepted)."
+                + "\nImages must be named U+XXXX.png (a leading index, as in 0000_U+XXXX.png, is also accepted)."
             )
 
     def generate(self, request: BackendRequest) -> BackendResult:

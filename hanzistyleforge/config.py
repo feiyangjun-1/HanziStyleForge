@@ -292,6 +292,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             },
         },
         "vq": {
+            # channels_last measured 12% SLOWER for this autoencoder on an
+            # RTX 5070 Ti Laptop, unlike the diffusion UNet where it helps, so
+            # the two are configured separately rather than sharing a flag.
+            "channels_last": False,
             # A code that stops being selected decays towards zero cluster size
             # while its running average decays identically, so the ratio that
             # defines it never moves and it can never be selected again. Any
@@ -308,7 +312,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "checkpoint_every_steps": 240,
             "validation_batches": 32,
             "loss_profile": "fast_balanced_v1",
-            "channels_last": True,
             "fused_optimizer": False,
             "loss_weights": {
                 "bce": 0.28, "dice": 0.26, "multiscale": 0.08,
@@ -355,10 +358,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "projection": 0.06, "cldice": 0.07, "sdf": 0.16,
                 "skeleton_head": 0.09, "edge_head": 0.08
             },
+            # Batch sizes fold in the gradient accumulation these phases used
+            # to carry: the effective batch is unchanged, but one optimizer
+            # step replaces several and the GPU stops idling between them.
+            # Measured on a 12 GB RTX 5070 Ti Laptop, latent256 went from
+            # 0.0235 to 0.0114 s per sample at 1.5 GB of peak memory.
             "phases": [
-                {"name": "latent256", "size": 256, "epochs": 280, "batch_size": 3, "gradient_accumulation": 2, "learning_rate": 0.00015, "minimum_learning_rate": 0.0000007, "patience": 64},
-                {"name": "latent384", "size": 384, "epochs": 210, "batch_size": 1, "gradient_accumulation": 6, "learning_rate": 0.000045, "minimum_learning_rate": 0.00000035, "patience": 52},
-                {"name": "latent512", "size": 512, "epochs": 150, "batch_size": 1, "gradient_accumulation": 10, "learning_rate": 0.000012, "minimum_learning_rate": 0.0000002, "patience": 44}
+                {"name": "latent256", "size": 256, "epochs": 280, "batch_size": 6, "gradient_accumulation": 1, "learning_rate": 0.00015, "minimum_learning_rate": 0.0000007, "patience": 64},
+                {"name": "latent384", "size": 384, "epochs": 210, "batch_size": 6, "gradient_accumulation": 1, "learning_rate": 0.000045, "minimum_learning_rate": 0.00000035, "patience": 52},
+                {"name": "latent512", "size": 512, "epochs": 150, "batch_size": 5, "gradient_accumulation": 2, "learning_rate": 0.000012, "minimum_learning_rate": 0.0000002, "patience": 44}
             ]
         },
         "purification": {
@@ -478,7 +486,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # is structure-locked to the reference proxy and therefore reproduces
         # its skeleton closely. A backend performing genuine style transfer
         # deviates from that skeleton by design, and measured against a
-        # fine-tuned zi2zi-JiT run the global gate rejected every glyph:
+        # style-transfer backend measured against it, the global gate rejected
         # topology_score ran at a median of 0.14 against a 0.06 limit and zone
         # skeleton distance at 0.26 against 0.155.
         #
@@ -499,31 +507,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "endpoint_tolerance_ratio": 0.45,
             "junction_tolerance_ratio": 0.45,
         },
+        "style_pool_size": 64,
         "dir": {
             "candidate_dirs": [],
             "require_complete": False,
-        },
-        "zi2zi_jit": {
-            "repo_dir": "",
-            "checkpoint": "",
-            # Empty reuses the interpreter running HanziStyleForge. zi2zi-JiT's
-            # inference path needs only torch, numpy, opencv and einops.
-            "python_executable": "",
-            "model": "",
-            "sampling_method": "ab2",
-            "num_sampling_steps": 20,
-            "cfg_scale": 2.6,
-            "batch_size": 16,
-            # None conditions on the label-drop token, which is correct for the
-            # published checkpoints because they never saw this target font.
-            # Set to 0 after a LoRA fine-tune.
-            "font_label": None,
-            "chunk_size": 2048,
-            "style_pool_size": 64,
-            "timeout_seconds": 0,
-            # Triton has no official Windows build and zi2zi-JiT decorates two
-            # forward() methods with @torch.compile.
-            "disable_torch_compile": True,
         },
     },
     "benchmark": {
@@ -577,11 +564,6 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
     if fusion_decomposition:
         cfg["fusion"]["component_atlas"]["decomposition_file"] = str(absolute_from(fusion_decomposition, base))
     backend_cfg = cfg.get("backend", {})
-    zi2zi_cfg = backend_cfg.get("zi2zi_jit", {})
-    for key in ("repo_dir", "checkpoint", "python_executable"):
-        value = zi2zi_cfg.get(key, "")
-        if value:
-            zi2zi_cfg[key] = str(absolute_from(value, base))
     directories = backend_cfg.get("dir", {}).get("candidate_dirs", [])
     if directories:
         backend_cfg["dir"]["candidate_dirs"] = [
@@ -634,7 +616,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("marathon.ensemble has an invalid member count.")
     backend_cfg = cfg.get("backend", {})
     backend_name = str(backend_cfg.get("name", "native")).lower()
-    if backend_name not in {"native", "dir", "zi2zi-jit"}:
+    if backend_name not in {"native", "dir"}:
         raise ValueError(
             f"backend.name={backend_cfg.get('name')!r} is unknown. Available values: native, dir, zi2zi-jit."
         )
@@ -642,16 +624,6 @@ def validate_config(cfg: dict[str, Any]) -> None:
         raise ValueError("backend.candidate_count must be at least 1.")
     if str(backend_cfg.get("normalization", "resample")).lower() not in {"resample", "ref_bbox_fit"}:
         raise ValueError("backend.normalization must be resample or ref_bbox_fit.")
-    if backend_name == "zi2zi-jit":
-        zi2zi_cfg = backend_cfg.get("zi2zi_jit", {})
-        if not str(zi2zi_cfg.get("repo_dir", "")).strip():
-            raise ValueError("backend.zi2zi_jit.repo_dir must be set when backend.name=zi2zi-jit.")
-        if not str(zi2zi_cfg.get("checkpoint", "")).strip():
-            raise ValueError("backend.zi2zi_jit.checkpoint must be set when backend.name=zi2zi-jit.")
-        if int(zi2zi_cfg.get("chunk_size", 1)) < 1:
-            raise ValueError("backend.zi2zi_jit.chunk_size must be at least 1.")
-        if int(zi2zi_cfg.get("batch_size", 1)) < 1:
-            raise ValueError("backend.zi2zi_jit.batch_size must be at least 1.")
     fusion = cfg.get("fusion", {})
     if bool(fusion.get("enabled", True)):
         if int(fusion.get("latent_channels", 32)) < 8:

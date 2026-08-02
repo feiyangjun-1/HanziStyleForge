@@ -87,13 +87,22 @@ class ExponentialMovingAverage:
     @torch.no_grad()
     def update(self, model: torch.nn.Module) -> None:
         for name, value in model.state_dict().items():
-            if name not in self.shadow:
+            shadow = self.shadow.get(name)
+            if shadow is None:
                 self.shadow[name] = value.detach().clone()
                 continue
+            if shadow.device != value.device:
+                # A restored shadow carries whatever device the checkpoint was
+                # read onto, which is the CPU, while the model has already been
+                # moved to the accelerator. Migrating here rather than at load
+                # time keeps every entry point self-healing, including a
+                # checkpoint written before this was handled.
+                shadow = shadow.to(value.device)
+                self.shadow[name] = shadow
             if not value.is_floating_point():
-                self.shadow[name].copy_(value)
+                shadow.copy_(value)
             else:
-                self.shadow[name].mul_(self.decay).add_(value.detach(), alpha=1.0 - self.decay)
+                shadow.mul_(self.decay).add_(value.detach(), alpha=1.0 - self.decay)
 
     def state_dict(self) -> dict[str, object]:
         return {"decay": self.decay, "shadow": self.shadow}
@@ -105,6 +114,12 @@ class ExponentialMovingAverage:
             self.shadow = {name: value.detach().clone() for name, value in shadow.items()}
 
     def copy_to(self, model: torch.nn.Module) -> None:
+        reference = next(iter(model.state_dict().values()), None)
+        if reference is not None:
+            self.shadow = {
+                name: value if value.device == reference.device else value.to(reference.device)
+                for name, value in self.shadow.items()
+            }
         model.load_state_dict(self.shadow, strict=True)
 
     @contextmanager

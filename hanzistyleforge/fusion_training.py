@@ -813,6 +813,7 @@ def _vq_model(cfg: dict[str, Any]) -> GlyphVQVAE:
         latent_channels=int(fusion.get("latent_channels", 32)),
         embeddings=int(fusion.get("vq_embeddings", 1024)),
         decay=float(vq.get("codebook_decay", 0.995)),
+        revive_threshold=float(vq.get("codebook_revive_threshold", 1.0)),
     )
 
 
@@ -824,6 +825,7 @@ def _vq_spec(cfg: dict[str, Any]) -> dict[str, Any]:
         "latent_channels": int(fusion.get("latent_channels", 32)),
         "embeddings": int(fusion.get("vq_embeddings", 1024)),
         "codebook_decay": float(vq.get("codebook_decay", 0.995)),
+        "codebook_revive_threshold": float(vq.get("codebook_revive_threshold", 1.0)),
     }
 
 

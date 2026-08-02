@@ -292,6 +292,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
             },
         },
         "vq": {
+            # A code that stops being selected decays towards zero cluster size
+            # while its running average decays identically, so the ratio that
+            # defines it never moves and it can never be selected again. Any
+            # code whose EMA count falls below this is reseeded onto a real
+            # encoder output. 0 disables revival and restores the previous
+            # behaviour, which collapsed a 512-entry codebook to a measured
+            # perplexity near 7.
+            "codebook_revive_threshold": 1.0,
             "base_channels": 52,
             "codebook_decay": 0.995,
             "commitment_weight": 0.24,

@@ -384,17 +384,70 @@ class LatentDiffusionUNet(nn.Module):
 class VectorQuantizerEMA(nn.Module):
     """EMA VQ codebook used as a target-stroke prior."""
 
-    def __init__(self, embeddings: int = 1024, dimension: int = 32, decay: float = 0.995, epsilon: float = 1e-5) -> None:
+    def __init__(
+        self,
+        embeddings: int = 1024,
+        dimension: int = 32,
+        decay: float = 0.995,
+        epsilon: float = 1e-5,
+        revive_threshold: float = 1.0,
+    ) -> None:
         super().__init__()
         self.embeddings = int(embeddings)
         self.dimension = int(dimension)
         self.decay = float(decay)
         self.epsilon = float(epsilon)
+        self.revive_threshold = float(revive_threshold)
+        self.last_revived = 0
         codebook = torch.randn(embeddings, dimension)
         codebook = F.normalize(codebook, dim=1)
         self.register_buffer("codebook", codebook)
         self.register_buffer("cluster_size", torch.zeros(embeddings))
         self.register_buffer("embedding_average", codebook.clone())
+
+    def _sample_encoder_outputs(self, flat: torch.Tensor, count: int) -> torch.Tensor:
+        indices = torch.randint(0, flat.shape[0], (count,), device=flat.device)
+        return flat[indices].detach().to(self.codebook.dtype)
+
+    def _initialize_from_data(self, flat: torch.Tensor) -> None:
+        """Seed the codebook from real encoder outputs.
+
+        The constructor can only place codes on the unit sphere, which has
+        nothing to do with where the encoder actually puts its features. Every
+        code then competes for the narrow cone the encoder occupies early in
+        training, a handful win, and the rest are never selected again because
+        nothing moves an unselected code. Seeding from the data instead starts
+        every code inside the distribution it has to cover.
+
+        Detected by a zero cluster_size rather than a flag, so a resumed
+        checkpoint keeps its learned codebook and no new buffer is added that
+        older checkpoints would fail to provide.
+        """
+
+        sampled = self._sample_encoder_outputs(flat, self.embeddings)
+        self.codebook.copy_(sampled)
+        self.embedding_average.copy_(sampled)
+        self.cluster_size.fill_(1.0)
+
+    def _revive_dead_codes(self, flat: torch.Tensor) -> int:
+        """Reseed codes that have stopped being selected.
+
+        cluster_size is an EMA of assignment counts, so a code that stops
+        winning decays towards zero while its embedding_average decays at the
+        same rate. The ratio that defines the code therefore stays fixed and it
+        can never come back on its own. Moving it onto a real encoder output
+        gives it a position that some input is actually near.
+        """
+
+        dead = self.cluster_size < self.revive_threshold
+        count = int(dead.sum().item())
+        if count == 0:
+            return 0
+        sampled = self._sample_encoder_outputs(flat, count)
+        self.codebook[dead] = sampled
+        self.embedding_average[dead] = sampled
+        self.cluster_size[dead] = float(self.revive_threshold)
+        return count
 
     def nearest(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         flat = z.permute(0, 2, 3, 1).contiguous().view(-1, self.dimension)
@@ -403,14 +456,34 @@ class VectorQuantizerEMA(nn.Module):
             - 2.0 * flat @ self.codebook.t()
             + self.codebook.square().sum(dim=1).unsqueeze(0)
         )
+        # A code that was never selected decays to the origin, and the origin is
+        # the nearest neighbour of anything near it. On a collapsed codebook
+        # that captures most of the latent grid and the decoder receives a
+        # near-constant field, which is how snapping turns a healthy sample into
+        # noise. Dead codes are therefore excluded from the search: a snap can
+        # only ever move a latent onto a code some real encoder output was once
+        # assigned to.
+        #
+        # The comparison is against epsilon rather than zero because the decay
+        # bottoms out at a denormal instead of a true zero. On a measured
+        # collapsed codebook the 1502 dead entries all sat at 1.4e-43, so a
+        # test for "greater than zero" excludes nothing at all.
+        alive = self.cluster_size > self.epsilon
+        if bool(alive.any()):
+            distances = distances.masked_fill(~alive.unsqueeze(0), float("inf"))
         indices = torch.argmin(distances, dim=1)
         quantized = F.embedding(indices, self.codebook).view(z.shape[0], z.shape[2], z.shape[3], self.dimension)
         quantized = quantized.permute(0, 3, 1, 2).contiguous()
         return quantized, indices.view(z.shape[0], z.shape[2], z.shape[3])
 
     def forward(self, z: torch.Tensor, update: bool = True) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        learning = bool(self.training and update)
+        if learning and float(self.cluster_size.sum().item()) == 0.0:
+            self._initialize_from_data(
+                z.permute(0, 2, 3, 1).contiguous().view(-1, self.dimension)
+            )
         quantized, indices = self.nearest(z)
-        if self.training and update:
+        if learning:
             flat = z.permute(0, 2, 3, 1).contiguous().view(-1, self.dimension)
             flat_indices = indices.reshape(-1)
             # bincount + index_add is mathematically equivalent to constructing
@@ -429,6 +502,10 @@ class VectorQuantizerEMA(nn.Module):
                 total + self.embeddings * self.epsilon
             ) * total
             self.codebook.copy_(self.embedding_average / normalized_count.unsqueeze(1).clamp_min(self.epsilon))
+            # After the EMA settles, anything still unused is dead and stays
+            # dead unless it is moved. Reviving here rather than before the
+            # update keeps this step's assignment statistics honest.
+            self.last_revived = self._revive_dead_codes(flat)
         commitment = F.mse_loss(z, quantized.detach())
         straight_through = z + (quantized - z).detach()
         histogram = torch.bincount(indices.reshape(-1), minlength=self.embeddings).float()
@@ -453,6 +530,7 @@ class GlyphVQVAE(nn.Module):
         latent_channels: int = 32,
         embeddings: int = 1024,
         decay: float = 0.995,
+        revive_threshold: float = 1.0,
     ) -> None:
         super().__init__()
         b = int(base)
@@ -469,7 +547,12 @@ class GlyphVQVAE(nn.Module):
             nn.Conv2d(b * 6, latent_channels, 1),
         )
         self.pre_quant = nn.Conv2d(latent_channels, latent_channels, 1)
-        self.quantizer = VectorQuantizerEMA(embeddings=embeddings, dimension=latent_channels, decay=decay)
+        self.quantizer = VectorQuantizerEMA(
+            embeddings=embeddings,
+            dimension=latent_channels,
+            decay=decay,
+            revive_threshold=revive_threshold,
+        )
         self.post_quant = nn.Conv2d(latent_channels, b * 6, 1)
         self.decoder = nn.Sequential(
             ResBlock(b * 6, b * 6),

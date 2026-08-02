@@ -23,6 +23,8 @@ from hanzistyleforge.backends import (
 )
 from hanzistyleforge.build_font import _map_codepoint
 from hanzistyleforge.features import expand_proxy_channels, make_target_aux, split_prediction
+from hanzistyleforge.fusion_diffusion import ExponentialMovingAverage
+from hanzistyleforge.fusion_model import VectorQuantizerEMA
 from hanzistyleforge.fusion_selftest import run_fusion_selftest
 from hanzistyleforge.fusion_training import (
     _create_vq_optimizer,
@@ -63,6 +65,117 @@ from hanzistyleforge.topology import topology_metrics, validate_topology
 from hanzistyleforge.vectorize import image_to_ttglyph
 from hanzistyleforge.util import deep_merge, save_json, write_csv
 from hanzistyleforge.config import DEFAULT_CONFIG, load_config
+
+
+def run_codebook_selftest() -> None:
+    """A VQ code that stops winning must not be annihilated.
+
+    The EMA update divides a decaying running average by a floored count, so an
+    unselected code shrinks geometrically towards the origin and can never be
+    chosen again. Measured on a real 1536-entry codebook trained for days:
+    34 entries had ever been used, the other 1502 sat at exactly zero, with a
+    median pairwise distance of zero between them.
+    """
+
+    def drifted(revive: float) -> tuple[float, int]:
+        """Seed a codebook on a wide distribution, then train on a narrow one.
+
+        Codes seeded away from the surviving mode stop being selected, which is
+        the situation the EMA update destroys them in.
+        """
+
+        torch.manual_seed(0)
+        quantizer = VectorQuantizerEMA(embeddings=64, dimension=8, decay=0.9, revive_threshold=revive)
+        quantizer.train()
+        torch.manual_seed(1)
+        quantizer(torch.randn(256, 8).mul(20.0).view(256, 8, 1, 1))
+        narrow = torch.full((256, 8), 4.0).view(256, 8, 1, 1) + torch.randn(256, 8, 1, 1) * 0.01
+        for _ in range(300):
+            quantizer(narrow)
+        norms = quantizer.codebook.norm(dim=1)
+        near = int(((quantizer.codebook - 4.0).norm(dim=1) < 1.0).sum())
+        return float(norms.min()), near
+
+    smallest, near = drifted(1.0)
+    assert near == 64, f"revival should bring every code back onto the data, got {near}/64"
+    assert smallest > 1.0, f"no code may be left at the origin, smallest norm {smallest:.2e}"
+
+    # The old behaviour must remain reproducible, both so it can be restored and
+    # so this test is demonstrating a real difference rather than asserting on
+    # something that was never broken.
+    smallest_off, near_off = drifted(0.0)
+    assert near_off <= 2, f"without revival the codebook should collapse, {near_off}/64 survived"
+    assert smallest_off < 1e-5, f"unselected codes should decay to zero, smallest {smallest_off:.2e}"
+
+    # An already-collapsed checkpoint must still snap safely, because the whole
+    # point of snapping is to move a latent onto a code some real glyph was
+    # assigned to, and the origin is not one. Reproduces a measured checkpoint:
+    # 34 live codes, the rest at the origin with a denormal cluster_size, which
+    # is why the test is against epsilon rather than zero.
+    collapsed = VectorQuantizerEMA(embeddings=64, dimension=8, decay=0.9)
+    collapsed.eval()
+    with torch.no_grad():
+        collapsed.codebook.zero_()
+        collapsed.cluster_size.fill_(1.401e-43)
+        collapsed.codebook[:4] = torch.randn(4, 8) * 7.0
+        collapsed.cluster_size[:4] = 100.0
+    torch.manual_seed(0)
+    latents = torch.randn(2048, 8).view(2048, 8, 1, 1)
+    snapped, chosen = collapsed.nearest(latents)
+    assert int(chosen.max()) < 4, "a dead code must never win the nearest-neighbour search"
+    assert float(snapped.view(2048, 8).norm(dim=1).median()) > 1.0, (
+        "snapping onto the origin collapses the decoder input to a constant field"
+    )
+
+    # A fresh codebook seeds itself from the data rather than the unit sphere.
+    torch.manual_seed(0)
+    seeded = VectorQuantizerEMA(embeddings=32, dimension=8, decay=0.9)
+    seeded.train()
+    far = torch.full((128, 8), 50.0).view(128, 8, 1, 1) + torch.randn(128, 8, 1, 1)
+    assert float(seeded.codebook.norm(dim=1).median()) < 5.0
+    seeded(far)
+    assert float(seeded.codebook.norm(dim=1).median()) > 40.0, "first batch must reseed the codebook"
+
+    # A resumed checkpoint keeps its learned codebook: a non-zero cluster_size
+    # is what marks it as already initialized, so no new buffer is needed and
+    # existing checkpoints still load strictly.
+    resumed = VectorQuantizerEMA(embeddings=32, dimension=8, decay=0.9)
+    resumed.load_state_dict(seeded.state_dict())
+    resumed.train()
+    before = resumed.codebook.clone()
+    resumed(far)
+    assert not torch.allclose(before, torch.zeros_like(before))
+    assert set(seeded.state_dict()) == set(VectorQuantizerEMA(embeddings=32, dimension=8).state_dict())
+
+
+def run_ema_resume_selftest() -> None:
+    """A restored EMA must survive the device the checkpoint was read onto.
+
+    torch.load brings the shadow back on the CPU while the model has already
+    been moved to the accelerator, so the first update after a resume failed
+    with a device mismatch. Only resumes hit it: a fresh run builds the shadow
+    from a model that is already in place.
+    """
+
+    model = torch.nn.Linear(4, 4)
+    ema = ExponentialMovingAverage(model, decay=0.99)
+    saved = ema.state_dict()
+    # Stand in for a checkpoint round trip, where every tensor comes back on
+    # the CPU regardless of where it was written from.
+    restored = ExponentialMovingAverage(model, decay=0.99)
+    restored.load_state_dict(
+        {"decay": saved["decay"], "shadow": {k: v.detach().cpu().clone() for k, v in saved["shadow"].items()}}
+    )
+    restored.update(model)
+    restored.copy_to(model)
+
+    if torch.cuda.is_available():
+        cuda_model = torch.nn.Linear(4, 4).cuda()
+        mismatched = ExponentialMovingAverage(cuda_model, decay=0.99)
+        mismatched.shadow = {name: value.cpu() for name, value in mismatched.shadow.items()}
+        mismatched.update(cuda_model)
+        assert all(value.is_cuda for value in mismatched.shadow.values())
+        mismatched.copy_to(cuda_model)
 
 
 def run_backend_selftest() -> None:
@@ -841,6 +954,8 @@ def main() -> None:
         score, features = discriminator(generator_ink, return_features=True)
     assert score.ndim == 4 and features
     run_fusion_selftest()
+    run_codebook_selftest()
+    run_ema_resume_selftest()
     run_backend_selftest()
     print("HanziStyleForge Fusion self-test: OK")
 

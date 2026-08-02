@@ -113,3 +113,36 @@ def configure_runtime(cfg: dict[str, Any]) -> dict[str, Any]:
             result["windows_sleep_error"] = str(exc)
 
     return result
+
+
+def resolve_device(cfg: dict[str, Any], stage: str):
+    """Turn the configured device string into a real torch device.
+
+    Only CUDA and CPU are implemented. Autocast and the gradient scaler are
+    both gated on CUDA, and the training loops assume it, so an accelerator
+    such as Apple's MPS would silently execute on the CPU instead. That is the
+    worst outcome available: a run that looks like it is using the GPU and is
+    actually tens of times slower, discovered days later. An unsupported device
+    is therefore rejected by name rather than quietly downgraded.
+    """
+
+    import torch
+
+    requested = str(cfg.get("training", {}).get("device", "cuda")).strip().lower()
+    if requested.startswith("cuda"):
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                f"{stage} is configured for {requested!r}, but torch.cuda.is_available() is False.\n"
+                "Install an NVIDIA driver and a CUDA build of PyTorch, or set training.device "
+                'to "cpu" in the configuration. CPU works but is far too slow for training.'
+            )
+        return torch.device(requested)
+    if requested == "cpu":
+        return torch.device("cpu")
+    raise RuntimeError(
+        f"{stage} does not support training.device={requested!r}. Supported values are "
+        '"cuda" (or "cuda:N") and "cpu".\n'
+        "Apple MPS in particular is not implemented: automatic mixed precision and the "
+        "gradient scaler are CUDA-only here, so an MPS request would run on the CPU while "
+        "appearing to use the GPU."
+    )

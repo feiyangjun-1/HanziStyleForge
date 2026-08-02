@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from .runtime import resolve_device
 from .analysis import DATASET_FIELDS
 from .config import CHECKPOINT_FORMAT_VERSION
 from .longrun import LongRunGuard
@@ -22,10 +23,8 @@ from .util import ensure_dir, load_json, read_csv, save_json, set_seed, sha256_f
 
 
 def _device(cfg: dict[str, Any]) -> torch.device:
-    requested = str(cfg["training"].get("device", "cuda"))
-    if requested.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError("Marathon training requires CUDA, but torch.cuda.is_available() is False.")
-    return torch.device(requested if requested.startswith("cuda") else "cpu")
+    device = resolve_device(cfg, "Marathon training")
+    return device
 
 
 def _autocast(device: torch.device, enabled: bool):

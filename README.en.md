@@ -1,128 +1,161 @@
-[简体中文](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [English](README.en.md)
+[简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 # HanziStyleForge Fusion
 
-An experimental Windows-first Han font reconstruction tool. It learns style from `target.ttf`, takes Han structure from `ref.otf`, and builds an installable TTF font.
+**Take the style of one font and use it to fill in the Han characters another font is missing.**
 
-> The project is designed for long unattended runs with checkpoint resume, safe stop, and automatic retry.
+Say you have a beautiful font that only covers a few thousand characters and you want it to cover twenty thousand. This tool learns what its strokes look like, then draws every missing character following the shapes of a reference font that does have full coverage, and packages the result as an installable `.ttf`.
 
-## What it does
+> Experimental. A full run takes days to weeks. You can interrupt it at any point and pick up where you left off.
 
-- Learns global and local font style from `fonts/target.ttf`.
-- Rebuilds every Han character covered by the default glyphs in `refs/ref.otf`.
-- Accepts Chinese Mainland, Taiwan, Hong Kong, Japanese, Korean or other reference glyph standards.
-- Tries to preserve Latin letters, numbers, symbols, kana, Hangul, and major OpenType data from the target font.
-- Automates training, generation, candidate selection, QA, vectorization, and font building.
+---
+
+## You provide two fonts
+
+| File | Role | What it means |
+|---|---|---|
+| `fonts/target.ttf` | **Style** | The font you like. Only its stroke appearance is learned |
+| `refs/ref.otf` | **Shapes** | A font with full character coverage. Its glyph structure is followed |
+
+For example: put a handwriting-style font at `target.ttf` and Source Han Sans at `refs/ref.otf`, and you get that handwriting style drawn to Source Han Sans' character shapes.
+
+**`ref.otf` decides the glyph standard.** Want mainland Chinese forms? Use a mainland reference font. Want Taiwan, Hong Kong, Japanese or Korean forms? Swap it for one of those. The program never decides which is "more correct" on its own.
+
+### What the font files must be
+
+- Static fonts. **Variable fonts, TTC and OTC are not supported**
+- `target.ttf` must be TrueType (with a `glyf` table)
+- `ref.otf` may be TrueType or CFF/OTF
+
+---
+
+## Hardware
+
+**An NVIDIA GPU is required.** Training is the bulk of this project and needs CUDA.
+
+| Platform | Can it train? |
+|---|---|
+| Windows + NVIDIA | Yes |
+| Linux + NVIDIA | Yes |
+| macOS | **No.** Macs have no NVIDIA GPU, Apple's MPS is not supported here, and CPU-only training is impractically slow |
+| Linux or Windows without a discrete GPU | Same as above |
+
+Also: Python 3.10-3.14, and at least 150 GB of free disk recommended. 12 GB of VRAM is enough; the shipped configuration is tuned for it.
+
+On a Mac you can still install, run the self-test, inspect fonts, or build a font from glyph images you already have. For training, use a machine with an NVIDIA GPU.
+
+---
+
+## Getting started
+
+### Windows
+
+Double-click these four, in order:
+
+| Step | Double-click | What it does |
+|---|---|---|
+| 1 | `install_cuda130.bat` | Sets up the environment. Once only |
+| 2 | — | Put your two fonts in `fonts\` and `refs\` |
+| 3 | `verify_project.bat` | Checks everything is in place |
+| 4 | `run_months_resilient.bat` | Starts the run |
+
+To pause, double-click `request_safe_stop.bat`. The run exits safely at its next checkpoint. Double-click `run_months_resilient.bat` again to continue.
+
+### Linux and macOS
+
+Open a terminal in the project folder:
+
+```bash
+./install.sh
+```
+
+Put your two fonts in `fonts/` and `refs/`, then:
+
+```bash
+./verify.sh
+./run.sh
+```
+
+To pause:
+
+```bash
+./stop.sh
+```
+
+Run `./run.sh` again to continue from the checkpoint.
+
+> If you get `Permission denied`, run `chmod +x *.sh` first.
+
+---
+
+## Where the output goes
+
+```text
+build/target-HanziStyleForge-Fusion.ttf               ← the font
+build/target-HanziStyleForge-Fusion.ttf.report.json   ← build report
+work_hanzistyleforge_fusion_months/qa/index.html      ← QA report, open in a browser
+```
+
+**Read the QA report before installing the font.** It shows every glyph side by side with the reference and the target, so you can see which characters came out well and which fell back to the reference shape.
+
+Training data, checkpoints and generation progress live in `work_hanzistyleforge_fusion_months/`. It runs to tens of gigabytes. **Do not delete it while a run is in progress.**
+
+---
+
+## What happens if it gets interrupted
+
+Nothing bad. Every stage and every generated glyph is checkpointed. Run the same command again and it continues from where it stopped.
+
+That covers power cuts, crashes and Ctrl+C alike. `run_months_resilient.bat` and `run.sh` also retry automatically after an error, giving up only after 20 consecutive failures, which means the fault is real rather than a passing hiccup.
+
+---
+
+## Questions people ask
+
+**How long does it take?**
+Days to weeks, depending on character count and GPU. On a 12 GB laptop GPU with the shipped configuration, plan in weeks.
+
+**Can I do just some characters?**
+Yes. Set `scope.mode` to `chars_file` in the configuration and point `scope.extra_chars_file` at a list, one character or `U+4E00`-style codepoint per line. Trying a few hundred characters first is a good habit.
+
+**Could it produce characters that break the glyph standard?**
+There is a structural gate: if a generated glyph's connected-component count or hole count disagrees with the reference, it is rejected and the reference shape is used instead. That prevents characters with a stroke too many or too few, at the cost of some characters keeping the reference look rather than your target style.
+
+**Does it touch anything that is not a Han character?**
+No. Latin letters, digits, punctuation, kana, Hangul, and the OpenType layout and hinting tables are carried over from `target.ttf` unchanged, and verified byte for byte during the build.
+
+**I get `requires CUDA, but torch.cuda.is_available() is False`.**
+No usable NVIDIA GPU was found. Update your driver, or check that you installed a CUDA build of PyTorch.
+
+**I get `does not support training.device='mps'`.**
+Apple GPUs are not supported. See the hardware section above.
+
+---
+
+## Before you use it
+
+- A full run may take days, weeks or longer
+- This repository contains no fonts, pretrained weights or third-party datasets
+- **A generated font may be subject to both the `target.ttf` and `ref.otf` licenses.** Use only fonts you have the right to train on, modify and distribute
+- This is experimental software. Check the QA report and test the font yourself before releasing anything
+
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for references and licensing.
+
+---
 
 ## How it works
 
 ```text
-target.ttf: style source
-        +
-ref.otf: Han structure and coverage
-        ↓
-Style Encoder → VQ → Diffusion → Refiner / Retrieval / IDS
-        ↓
-Candidate selection → QA → Outline conversion → TTF
+target.ttf (style)   ref.otf (glyph structure)
+        └──────┬──────┘
+               ↓
+   style encoder → VQ stroke codebook → latent diffusion → refiner
+               ↓
+   multiple candidates → structural gate → QA → outline tracing → TTF
 ```
 
-The program does not decide which regional glyph form is “more correct.” Final Han structure follows the default Unicode `cmap` glyphs in `ref.otf`.
-
-## Requirements
-
-- Windows 11 64-bit
-- NVIDIA GPU with CUDA support
-- Python 3.10 or later
-- At least 150 GB of free disk space recommended
-
-Input fonts:
-
-```text
-fonts\target.ttf
-refs\ref.otf
-```
-
-Static fonts are recommended. `target.ttf` should contain a TrueType `glyf` table. `ref.otf` may be a static TrueType or static CFF OTF. Variable fonts, TTC, and OTC are not supported.
-
-## Quick start
-
-1. Download or clone this repository.
-2. Place the style font at `fonts\target.ttf`.
-3. Place the structure reference at `refs\ref.otf`.
-4. Install the environment:
-
-   ```text
-   install_cuda130.bat
-   ```
-
-5. Verify the project:
-
-   ```text
-   verify_project.bat
-   ```
-
-6. Start or resume the complete pipeline:
-
-   ```text
-   run_months_resilient.bat
-   ```
-
-7. Request a safe stop:
-
-   ```text
-   request_safe_stop.bat
-   ```
-
-`run_months_resilient.bat` clears the stop marker on launch, so this is only needed when starting a run some other way:
-
-   ```text
-   clear_safe_stop.bat
-   ```
-
-## Outputs
-
-Main outputs:
-
-```text
-build\target-HanziStyleForge-Fusion.ttf
-build\target-HanziStyleForge-Fusion.ttf.report.json
-work_hanzistyleforge_fusion_months\qa\index.html
-```
-
-Training data, checkpoints, and generation progress are stored in:
-
-```text
-work_hanzistyleforge_fusion_months\
-```
-
-Do not delete this directory while training is in progress.
-
-## Before you use it
-
-- A complete run may take days, weeks, or longer.
-- The repository does not include fonts, pretrained weights, or third-party font datasets.
-- Generated fonts may remain subject to both the `target.ttf` and `ref.otf` licenses.
-- Use only fonts that you are allowed to train on, modify, and redistribute.
-- This is experimental software. Review the QA page and test the final font before release.
-
-## Research and reference sources
-
-HanziStyleForge Fusion is an independent implementation. The following projects and papers informed its architecture. Their source code, pretrained weights, and font datasets are not bundled in this repository.
-
-| Source | Ideas studied |
-|---|---|
-| [zi2zi](https://github.com/kaonashi-tyc/zi2zi) | Han glyph style transfer and content/style separation |
-| [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) | Multi-reference style conditioning and diffusion transformers |
-| [FontDiffuser](https://github.com/yeungchenwa/FontDiffuser) | Diffusion generation, multi-scale content aggregation, explicit style constraints |
-| [HanziGen](https://github.com/wangwenho/HanziGen) | VQ representations and conditional latent diffusion |
-| [VQ-Font](https://github.com/Yaomingshuai/VQ-Font) | Discrete font tokens and structure-aware enhancement |
-| [LF-Font / MX-Font](https://github.com/clovaai/fewshot-font-generation) | Local component style, factorization, and multiple experts |
-| [DeepVecFont-v2](https://github.com/yizhiwang96/deepvecfont-v2) | Transformer vector sequences and contour correction |
-| [Efficient and Scalable Chinese Vector Font Generation via Component Composition](https://arxiv.org/abs/2404.06779) | Component-region transforms and scalable composition |
-| [cjkvi/cjkvi-ids](https://github.com/cjkvi/cjkvi-ids) | Unicode IDS component structure and local-region hints |
-
-A citation indicates architectural reference only. It does not grant permission to copy upstream code, weights, data, or fonts. Check the current license and terms of every third-party artifact before use.
+Style is learned only from `target.ttf` and structure taken only from `ref.otf`. The two data paths are kept separate and that separation is verified at runtime.
 
 ## Contributing
 
-Issues and pull requests are welcome. Any contributed third-party code, data, or model must include its source and license information.
+Issues and pull requests are welcome. When contributing third-party code, data or models, include the source and license.

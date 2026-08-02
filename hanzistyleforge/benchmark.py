@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
+from .runtime import resolve_device
 from .config import CHECKPOINT_FORMAT_VERSION
 from .dataset import GlyphStyleDataset
 from .features import split_prediction
@@ -28,10 +29,8 @@ BENCHMARK_FIELDS = [
 
 
 def _device(cfg: dict[str, Any]) -> torch.device:
-    requested = str(cfg["training"].get("device", "cuda"))
-    if requested.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError("The HanziStyleForge benchmark requires CUDA, but torch.cuda.is_available() is False.")
-    return torch.device(requested if requested.startswith("cuda") else "cpu")
+    device = resolve_device(cfg, "The benchmark")
+    return device
 
 
 def _autocast(device: torch.device, enabled: bool):

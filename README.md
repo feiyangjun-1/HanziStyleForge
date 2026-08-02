@@ -1,128 +1,161 @@
-[简体中文](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [English](README.en.md)
+[简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 # HanziStyleForge Fusion
 
-一个面向 Windows 的实验性汉字字体重建工具：从 `target.ttf` 学习字体风格，从 `ref.otf` 获取汉字结构，并生成可安装的 TTF 字体。
+**用一个字体的风格，补全另一个字体缺的汉字。**
 
-> 项目适合长时间自动运行，支持检查点恢复、安全暂停和失败重试。
+比如你有一个只做了几千字的漂亮字体，想把它扩充到两万多字。这个工具会学习它的笔画风格，再按一个字数齐全的参考字体的字形结构，把缺的字一个个画出来，最后打包成一个可以直接安装的 `.ttf` 文件。
 
-## 它能做什么
+> 实验性项目。完整跑一次要几天到几周，中途可以随时中断，下次接着跑。
 
-- 从 `fonts/target.ttf` 学习整体与局部字体风格。
-- 按 `refs/ref.otf` 的默认字形重建其覆盖的全部汉字。
-- 参考字体可以是大陆、台湾、香港、日本、韩国或其他字形标准。
-- 尽量保留目标字体中的拉丁字母、数字、符号、假名、谚文及主要 OpenType 数据。
-- 自动完成训练、生成、候选筛选、QA、矢量化和字体构建。
+---
 
-## 工作方式
+## 你需要准备两个字体
 
-```text
-target.ttf：提供风格
-        +
-ref.otf：提供汉字结构和覆盖范围
-        ↓
-Style Encoder → VQ → Diffusion → Refiner / Retrieval / IDS
-        ↓
-候选筛选 → QA → 轮廓转换 → TTF
+| 文件 | 作用 | 说明 |
+|---|---|---|
+| `fonts/target.ttf` | **风格来源** | 你喜欢的那个字体。程序只从它学"笔画长什么样" |
+| `refs/ref.otf` | **字形来源** | 一个字数齐全的字体。程序按它的字形结构来画 |
+
+举例：`target.ttf` 放思源黑体改的手写风字体，`refs/ref.otf` 放思源黑体本体，产出就是"手写风格 + 思源黑体字形标准"的完整字体。
+
+**字形标准由 `ref.otf` 决定。** 想要大陆规范就放大陆版参考字体，想要台湾、香港、日本、韩国标准就换对应的。程序不会自己判断哪种"更对"。
+
+### 对字体文件的要求
+
+- 静态字体。**可变字体、TTC、OTC 不支持**
+- `target.ttf` 要是 TrueType（含 `glyf` 表）
+- `ref.otf` 可以是 TrueType 或 CFF/OTF
+
+---
+
+## 硬件要求
+
+**必须有 NVIDIA 显卡。** 训练是这个项目的主体，没有 CUDA 就跑不动。
+
+| 平台 | 能否训练 |
+|---|---|
+| Windows + NVIDIA | 可以 |
+| Linux + NVIDIA | 可以 |
+| macOS | **不行**。Mac 没有 NVIDIA 显卡，Apple 的 MPS 也未支持，只能用 CPU，慢到不现实 |
+| 无独显的 Linux / Windows | 同上 |
+
+其他要求：Python 3.10-3.14，建议至少 150 GB 空闲磁盘。显存 12 GB 够用（默认配置就是按 12 GB 调的）。
+
+在 Mac 上你仍然可以安装并运行自检、检查字体、或者把已经生成好的字形图片打包成字体，但训练请找一台有 N 卡的机器。
+
+---
+
+## 开始使用
+
+### Windows
+
+双击这四个文件，按顺序：
+
+| 步骤 | 双击 | 做什么 |
+|---|---|---|
+| 1 | `install_cuda130.bat` | 装环境。只需一次 |
+| 2 | — | 把两个字体放进 `fonts\` 和 `refs\` |
+| 3 | `verify_project.bat` | 检查一切正常 |
+| 4 | `run_months_resilient.bat` | 开跑 |
+
+想中途暂停就双击 `request_safe_stop.bat`，程序会在下一个存档点安全退出。再次双击 `run_months_resilient.bat` 就接着跑。
+
+### Linux 和 macOS
+
+打开终端，进入项目目录：
+
+```bash
+./install.sh
 ```
 
-程序不会自行判断哪一种地区字形“更正确”。最终汉字结构以 `ref.otf` 的默认 Unicode `cmap` 字形为准。
+把两个字体放进 `fonts/` 和 `refs/`，然后：
 
-## 环境要求
-
-- Windows 11 64 位
-- 支持 CUDA 的 NVIDIA GPU
-- Python 3.10 或更高版本
-- 建议至少 150 GB 可用磁盘空间
-
-输入字体：
-
-```text
-fonts\target.ttf
-refs\ref.otf
+```bash
+./verify.sh
+./run.sh
 ```
 
-建议使用静态字体。`target.ttf` 应包含 TrueType `glyf` 表；`ref.otf` 可以是静态 TrueType 或静态 CFF OTF。不要使用可变字体、TTC 或 OTC。
+想中途暂停：
 
-## 快速开始
-
-1. 下载或克隆本仓库。
-2. 将目标字体放到 `fonts\target.ttf`。
-3. 将参考字体放到 `refs\ref.otf`。
-4. 双击安装环境：
-
-   ```text
-   install_cuda130.bat
-   ```
-
-5. 检查项目：
-
-   ```text
-   verify_project.bat
-   ```
-
-6. 开始或继续完整流程：
-
-   ```text
-   run_months_resilient.bat
-   ```
-
-7. 安全暂停：
-
-   ```text
-   request_safe_stop.bat
-   ```
-
-`run_months_resilient.bat` 启动时会自动清除暂停标记，所以正常流程不需要第 8 步。只有用其他方式启动时才需要手动清除：
-
-   ```text
-   clear_safe_stop.bat
-   ```
-
-## 输出文件
-
-主要输出：
-
-```text
-build\target-HanziStyleForge-Fusion.ttf
-build\target-HanziStyleForge-Fusion.ttf.report.json
-work_hanzistyleforge_fusion_months\qa\index.html
+```bash
+./stop.sh
 ```
 
-中间训练数据、检查点和生成进度保存在：
+再运行一次 `./run.sh` 就从存档点接着跑。
+
+> 如果提示 `Permission denied`，先执行 `chmod +x *.sh`。
+
+---
+
+## 产出在哪
 
 ```text
-work_hanzistyleforge_fusion_months\
+build/target-HanziStyleForge-Fusion.ttf        ← 成品字体
+build/target-HanziStyleForge-Fusion.ttf.report.json   ← 构建报告
+work_hanzistyleforge_fusion_months/qa/index.html      ← 质检报告，用浏览器打开
 ```
 
-不要在训练过程中删除该目录。
+**装字体之前先看质检报告。** 里面有逐字对照图，能看出哪些字生成得好、哪些回退成了参考字形。
+
+训练数据、模型存档和生成进度都在 `work_hanzistyleforge_fusion_months/`，几十 GB，**跑的过程中别删**。
+
+---
+
+## 中断了会怎样
+
+不会怎样。每个阶段和每个生成的字都有存档，再跑一次同样的命令就从断点继续。
+
+断电、蓝屏、Ctrl+C 都一样。Windows 的 `run_months_resilient.bat` 和 Linux/macOS 的 `run.sh` 还会在出错后自动重试，连续失败 20 次才会停下来——那说明是真的有问题，不是一时的波动。
+
+---
+
+## 常见问题
+
+**要跑多久？**
+几天到几周，取决于字数和显卡。默认配置在 12 GB 的笔记本显卡上是按周计的。
+
+**能不能只跑一部分字？**
+可以。在配置文件里把 `scope.mode` 改成 `chars_file`，用 `scope.extra_chars_file` 指向一个字表文件（每行一个字或一个 `U+4E00` 形式的码位）。先拿几百字试跑一遍是个好习惯。
+
+**生成的字会不会不符合规范？**
+程序有一道结构闸门：生成的字如果连通分量数、孔洞数和参考字对不上，就会被拒绝并改用参考字形。这保证不会出现"多一笔少一笔"的错字，代价是有一部分字保持参考字体的样子而不是目标风格。
+
+**非汉字内容会被改吗？**
+不会。拉丁字母、数字、标点、假名、谚文,以及 OpenType 的排版和 hinting 数据都从 `target.ttf` 原样保留，构建时会逐字节校验。
+
+**报错 `requires CUDA, but torch.cuda.is_available() is False`？**
+没检测到可用的 NVIDIA 显卡。更新显卡驱动，或确认装的是 CUDA 版 PyTorch。
+
+**报错 `does not support training.device='mps'`？**
+Apple GPU 不受支持。见上面的硬件要求。
+
+---
 
 ## 使用前须知
 
-- 完整流程可能持续数天、数周或更久。
-- 项目不包含字体文件、预训练权重或第三方字体数据集。
-- 生成字体可能同时受 `target.ttf` 和 `ref.otf` 的许可证约束。
-- 请仅使用你有权训练、修改和发布的字体。
-- 本项目是实验性工具，正式发布字体前请检查 QA 页面并进行人工测试。
+- 完整流程可能持续数天、数周或更久
+- 本仓库不含任何字体文件、预训练权重或第三方数据集
+- **生成的字体可能同时受 `target.ttf` 和 `ref.otf` 的许可证约束**。请只使用你有权训练、修改和发布的字体
+- 这是实验性工具。正式发布前请检查质检报告并人工测试
 
-## 研究与参考来源
+第三方引用和许可信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-HanziStyleForge Fusion 是独立实现。以下项目和论文为架构设计提供了参考；本仓库不直接打包它们的源码、预训练权重或字体数据集。
+---
 
-| 来源 | 参考方向 |
-|---|---|
-| [zi2zi](https://github.com/kaonashi-tyc/zi2zi) | 汉字风格迁移、内容与风格分离 |
-| [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) | 多参考风格条件、扩散 Transformer |
-| [FontDiffuser](https://github.com/yeungchenwa/FontDiffuser) | 扩散生成、多尺度内容聚合、显式风格约束 |
-| [HanziGen](https://github.com/wangwenho/HanziGen) | VQ 表示与条件潜空间扩散 |
-| [VQ-Font](https://github.com/Yaomingshuai/VQ-Font) | 离散字体 token 与结构感知增强 |
-| [LF-Font / MX-Font](https://github.com/clovaai/fewshot-font-generation) | 局部部件风格、因子分解、多专家 |
-| [DeepVecFont-v2](https://github.com/yizhiwang96/deepvecfont-v2) | Transformer 矢量序列与轮廓修正 |
-| [Efficient and Scalable Chinese Vector Font Generation via Component Composition](https://arxiv.org/abs/2404.06779) | 部件区域变换与大规模组合 |
-| [cjkvi/cjkvi-ids](https://github.com/cjkvi/cjkvi-ids) | Unicode IDS 部件结构与局部区域提示 |
+## 工作原理
 
-引用只表示方法层面的参考，不代表获得复制上游代码、权重、数据或字体的许可。使用任何第三方材料前，请检查其当前许可证与使用条款。
+```text
+target.ttf（风格）  ref.otf（字形结构）
+        └──────┬──────┘
+               ↓
+   风格编码 → VQ 笔画码本 → 潜空间扩散 → 精修
+               ↓
+   多候选生成 → 结构闸门筛选 → 质检 → 轮廓矢量化 → TTF
+```
+
+程序只从 `target.ttf` 学风格，只从 `ref.otf` 取结构，两者的数据流是分开的并在运行时校验。
 
 ## 贡献
 
-欢迎提交 Issue 和 Pull Request。请在提交第三方代码、数据或模型时同时说明来源与许可证。
+欢迎 Issue 和 Pull Request。提交第三方代码、数据或模型时请注明来源与许可证。

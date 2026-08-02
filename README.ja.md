@@ -1,128 +1,161 @@
-[简体中文](README.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [English](README.en.md)
+[简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
 # HanziStyleForge Fusion
 
-Windows 向けの実験的な漢字フォント再構築ツールです。`target.ttf` から書体スタイルを学習し、`ref.otf` から漢字構造を取得して、インストール可能な TTF フォントを生成します。
+**あるフォントのスタイルで、別のフォントに足りない漢字を補完します。**
 
-> 長時間の無人実行を想定し、チェックポイント再開、安全停止、自動再試行に対応しています。
+数千字しか収録していないお気に入りのフォントを、二万字規模まで広げたいとき。このツールはそのフォントの筆画の見た目を学習し、字数の揃った参照フォントの字形に従って不足分を一字ずつ描き起こし、そのままインストールできる `.ttf` にまとめます。
 
-## 主な機能
+> 実験的なツールです。一度の実行に数日から数週間かかります。いつ中断しても、次回は続きから再開します。
 
-- `fonts/target.ttf` から全体および局所的な書体スタイルを学習します。
-- `refs/ref.otf` のデフォルト字形が持つすべての漢字を再構築します。
-- 中国大陸、台湾、香港、日本、韓国などの参照フォントを利用できます。
-- 対象フォントのラテン文字、数字、記号、仮名、ハングル、主要な OpenType データを可能な限り保持します。
-- 学習、生成、候補選択、QA、ベクトル化、フォント構築を自動化します。
+---
 
-## 処理の概要
+## 用意するフォントは 2 つ
 
-```text
-target.ttf：スタイル
-        +
-ref.otf：漢字構造と対象範囲
-        ↓
-Style Encoder → VQ → Diffusion → Refiner / Retrieval / IDS
-        ↓
-候補選択 → QA → 輪郭変換 → TTF
-```
+| ファイル | 役割 | 内容 |
+|---|---|---|
+| `fonts/target.ttf` | **スタイル** | 好きなフォント。筆画の見た目だけを学習します |
+| `refs/ref.otf` | **字形** | 字数の揃ったフォント。その字形構造に従います |
 
-プログラムは地域字形の正誤を判断しません。最終的な漢字構造は `ref.otf` のデフォルト Unicode `cmap` 字形に従います。
+例：`target.ttf` に手書き風フォント、`refs/ref.otf` に源ノ角ゴシックを置くと、源ノ角ゴシックの字形で手書き風に描かれたフォントが得られます。
+
+**字形の基準は `ref.otf` が決めます。** 中国大陸の字形が欲しければ大陸版の参照フォントを、台湾・香港・日本・韓国の字形が欲しければそれぞれのフォントを置いてください。プログラムがどれを「正しい」と判断することはありません。
+
+### フォントファイルの条件
+
+- 静的フォント。**可変フォント、TTC、OTC は非対応**
+- `target.ttf` は TrueType（`glyf` テーブルを含むもの）
+- `ref.otf` は TrueType でも CFF/OTF でも可
+
+---
 
 ## 動作環境
 
-- Windows 11 64-bit
-- CUDA 対応 NVIDIA GPU
-- Python 3.10 以降
-- 150 GB 以上の空き容量を推奨
+**NVIDIA GPU が必須です。** 学習がこのプロジェクトの本体で、CUDA を必要とします。
 
-入力フォント：
+| プラットフォーム | 学習の可否 |
+|---|---|
+| Windows + NVIDIA | 可 |
+| Linux + NVIDIA | 可 |
+| macOS | **不可**。Mac に NVIDIA GPU はなく、Apple の MPS も未対応です。CPU のみでは実用にならない速度になります |
+| 独立 GPU のない Linux / Windows | 同上 |
 
-```text
-fonts\target.ttf
-refs\ref.otf
+そのほか：Python 3.10-3.14、空き容量 150 GB 以上を推奨。VRAM は 12 GB あれば十分で、同梱の設定はそれに合わせて調整されています。
+
+Mac でもインストール、セルフテスト、フォントの確認、既にある字形画像からのフォント構築はできます。学習には NVIDIA GPU を積んだマシンをご用意ください。
+
+---
+
+## 使い方
+
+### Windows
+
+次の 4 つを順にダブルクリックします。
+
+| 手順 | ダブルクリック | 内容 |
+|---|---|---|
+| 1 | `install_cuda130.bat` | 環境構築。初回のみ |
+| 2 | — | 2 つのフォントを `fonts\` と `refs\` に置く |
+| 3 | `verify_project.bat` | 準備が整っているか確認 |
+| 4 | `run_months_resilient.bat` | 実行開始 |
+
+中断したいときは `request_safe_stop.bat` をダブルクリックすると、次のチェックポイントで安全に終了します。`run_months_resilient.bat` をもう一度ダブルクリックすれば続きから再開します。
+
+### Linux と macOS
+
+プロジェクトのフォルダーでターミナルを開きます。
+
+```bash
+./install.sh
 ```
 
-静的フォントを推奨します。`target.ttf` には TrueType `glyf` テーブルが必要です。`ref.otf` は静的 TrueType または静的 CFF OTF を使用できます。可変フォント、TTC、OTC は使用しないでください。
+2 つのフォントを `fonts/` と `refs/` に置いてから：
 
-## クイックスタート
-
-1. リポジトリをダウンロードまたはクローンします。
-2. スタイル元フォントを `fonts\target.ttf` に配置します。
-3. 構造参照フォントを `refs\ref.otf` に配置します。
-4. 環境をインストールします。
-
-   ```text
-   install_cuda130.bat
-   ```
-
-5. プロジェクトを確認します。
-
-   ```text
-   verify_project.bat
-   ```
-
-6. 完全な処理を開始または再開します。
-
-   ```text
-   run_months_resilient.bat
-   ```
-
-7. 安全停止：
-
-   ```text
-   request_safe_stop.bat
-   ```
-
-`run_months_resilient.bat` は起動時に停止マーカーを削除するため、別の方法で実行する場合にのみ必要です。
-
-   ```text
-   clear_safe_stop.bat
-   ```
-
-## 出力
-
-主な出力：
-
-```text
-build\target-HanziStyleForge-Fusion.ttf
-build\target-HanziStyleForge-Fusion.ttf.report.json
-work_hanzistyleforge_fusion_months\qa\index.html
+```bash
+./verify.sh
+./run.sh
 ```
 
-学習データ、チェックポイント、生成進捗は次の場所に保存されます。
+中断したいとき：
 
-```text
-work_hanzistyleforge_fusion_months\
+```bash
+./stop.sh
 ```
 
-学習中はこのフォルダーを削除しないでください。
+`./run.sh` をもう一度実行すればチェックポイントから再開します。
+
+> `Permission denied` と出る場合は先に `chmod +x *.sh` を実行してください。
+
+---
+
+## 出力先
+
+```text
+build/target-HanziStyleForge-Fusion.ttf               ← 完成したフォント
+build/target-HanziStyleForge-Fusion.ttf.report.json   ← ビルドレポート
+work_hanzistyleforge_fusion_months/qa/index.html      ← QA レポート。ブラウザーで開きます
+```
+
+**フォントを入れる前に QA レポートを確認してください。** 参照・目標・生成結果を一字ずつ並べてあるので、うまく生成できた字と参照字形にフォールバックした字が見分けられます。
+
+学習データ、チェックポイント、生成の進捗は `work_hanzistyleforge_fusion_months/` に入り、数十 GB になります。**実行中は削除しないでください。**
+
+---
+
+## 中断したらどうなるか
+
+問題ありません。各段階と生成済みの各字がチェックポイントとして保存されており、同じコマンドをもう一度実行すれば止まった所から続きます。
+
+停電、クラッシュ、Ctrl+C のいずれでも同じです。`run_months_resilient.bat` と `run.sh` はエラー後に自動で再試行し、20 回連続で失敗した場合にのみ停止します。そこまで続けば一時的な不調ではなく本当の不具合だからです。
+
+---
+
+## よくある質問
+
+**どのくらい時間がかかりますか。**
+字数と GPU 次第で数日から数週間です。12 GB のノート PC 用 GPU で同梱設定なら、週単位で見込んでください。
+
+**一部の字だけ処理できますか。**
+できます。設定の `scope.mode` を `chars_file` にし、`scope.extra_chars_file` で 1 行 1 字（または `U+4E00` 形式）のリストを指定します。まず数百字で試すのがおすすめです。
+
+**字形の基準から外れた字が出ませんか。**
+構造ゲートがあります。生成した字の連結成分数や穴の数が参照と食い違う場合は却下し、参照字形を使います。画数が増減した誤字は防げますが、その代わり一部の字は目標のスタイルではなく参照側の見た目のままになります。
+
+**漢字以外は変更されますか。**
+されません。ラテン文字、数字、約物、仮名、ハングル、および OpenType のレイアウト・ヒンティングのテーブルは `target.ttf` からそのまま引き継がれ、ビルド時にバイト単位で検証されます。
+
+**`requires CUDA, but torch.cuda.is_available() is False` と出ます。**
+使用可能な NVIDIA GPU が見つかりません。ドライバーを更新するか、CUDA 版の PyTorch が入っているか確認してください。
+
+**`does not support training.device='mps'` と出ます。**
+Apple GPU は非対応です。上の動作環境をご覧ください。
+
+---
 
 ## 使用前の注意
 
-- 完全な処理には数日、数週間、またはそれ以上かかる場合があります。
-- リポジトリにはフォント、事前学習済み重み、第三者フォントデータセットは含まれません。
-- 生成フォントには `target.ttf` と `ref.otf` の両方のライセンスが適用される場合があります。
-- 学習、変更、再配布の権利を持つフォントだけを使用してください。
-- 本プロジェクトは実験的です。公開前に QA ページと最終フォントを確認してください。
+- 全工程には数日、数週間、またはそれ以上かかる場合があります
+- 本リポジトリにフォント、事前学習済み重み、第三者データセットは含まれません
+- **生成されたフォントには `target.ttf` と `ref.otf` の両方のライセンスが適用される場合があります。** 学習・改変・配布の権利を持つフォントだけをお使いください
+- 実験的なソフトウェアです。公開前に QA レポートを確認し、ご自身でテストしてください
 
-## 研究・参考資料
+参考文献とライセンスは [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) をご覧ください。
 
-HanziStyleForge Fusion は独立実装です。以下のプロジェクトと論文はアーキテクチャ設計の参考です。上流のソースコード、事前学習済み重み、フォントデータセットは本リポジトリに同梱されていません。
+---
 
-| 出典 | 参考にした方向 |
-|---|---|
-| [zi2zi](https://github.com/kaonashi-tyc/zi2zi) | 漢字スタイル変換、内容とスタイルの分離 |
-| [zi2zi-JiT](https://github.com/kaonashi-tyc/zi2zi-JiT) | 複数参照スタイル条件、拡散 Transformer |
-| [FontDiffuser](https://github.com/yeungchenwa/FontDiffuser) | 拡散生成、マルチスケール内容集約、明示的スタイル制約 |
-| [HanziGen](https://github.com/wangwenho/HanziGen) | VQ 表現と条件付き潜在拡散 |
-| [VQ-Font](https://github.com/Yaomingshuai/VQ-Font) | 離散フォント token と構造認識強化 |
-| [LF-Font / MX-Font](https://github.com/clovaai/fewshot-font-generation) | 局所部品スタイル、因子分解、複数専門家 |
-| [DeepVecFont-v2](https://github.com/yizhiwang96/deepvecfont-v2) | Transformer ベクトル系列と輪郭補正 |
-| [Efficient and Scalable Chinese Vector Font Generation via Component Composition](https://arxiv.org/abs/2404.06779) | 部品領域変換と大規模合成 |
-| [cjkvi/cjkvi-ids](https://github.com/cjkvi/cjkvi-ids) | Unicode IDS 部品構造と局所領域ヒント |
+## 仕組み
 
-引用は手法上の参考を示すだけであり、上流のコード、重み、データ、フォントをコピーする許可ではありません。第三者資料を使用する前に、現在のライセンスと利用条件を確認してください。
+```text
+target.ttf（スタイル）  ref.otf（字形構造）
+        └──────┬──────┘
+               ↓
+   スタイル符号化 → VQ 筆画コードブック → 潜在拡散 → 精緻化
+               ↓
+   複数候補 → 構造ゲート → QA → 輪郭ベクトル化 → TTF
+```
+
+スタイルは `target.ttf` からのみ、構造は `ref.otf` からのみ取り込みます。2 つのデータ経路は分離されており、その分離は実行時に検証されます。
 
 ## コントリビューション
 
-Issue と Pull Request を歓迎します。第三者のコード、データ、モデルを追加する場合は、出典とライセンス情報を明記してください。
+Issue と Pull Request を歓迎します。第三者のコード、データ、モデルを追加する場合は出典とライセンスを明記してください。

@@ -20,6 +20,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from .runtime import resolve_device
 from .component_atlas import build_component_atlas
 from .contour_polish import ContourDenoiseDataset, build_contour_cache
 from .dataset import GlyphStyleDataset
@@ -61,10 +62,8 @@ FUSION_CHECKPOINT_VERSION = 301
 
 
 def _device(cfg: dict[str, Any]) -> torch.device:
-    requested = str(cfg.get("training", {}).get("device", "cuda"))
-    if requested.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError("Fusion training requires CUDA, but torch.cuda.is_available() is False")
-    return torch.device(requested if requested.startswith("cuda") else "cpu")
+    device = resolve_device(cfg, "Fusion training")
+    return device
 
 
 def _autocast(device: torch.device, enabled: bool):

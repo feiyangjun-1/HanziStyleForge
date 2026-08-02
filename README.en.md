@@ -2,9 +2,16 @@
 
 # HanziStyleForge Fusion
 
-**Take the style of one font and use it to fill in the Han characters another font is missing.**
+**Regenerate every Han character in one font's style, following another font's glyph standard.**
 
-Say you have a beautiful font that only covers a few thousand characters and you want it to cover twenty thousand. This tool learns what its strokes look like, then draws every missing character following the shapes of a reference font that does have full coverage, and packages the result as an installable `.ttf`.
+The tool learns the target font's stroke style, then redraws **every** Han character the reference font covers, following the reference's glyph shapes, and packages the result as an installable `.ttf`.
+
+Note that it regenerates rather than fills gaps: a character already present in the target font is still redrawn to the reference shape. That is what makes the finished set consistent.
+
+Two typical uses:
+
+- **Extend coverage.** The target font has a few thousand characters and you want twenty thousand
+- **Change glyph standard.** The target font uses Taiwan forms (or Japanese, or Korean) and you want mainland Chinese ones. Swap in a mainland reference font: the style is kept, the shapes are redrawn to the new standard
 
 > Experimental. A full run takes days to weeks. You can interrupt it at any point and pick up where you left off.
 

@@ -53,6 +53,128 @@ On a Mac you can still install, run the self-test, inspect fonts, or build a fon
 
 ---
 
+## Settings for your amount of VRAM
+
+The shipped `config_months_12gb.json` is tuned for **12 GB**. On a 12 GB card, change nothing.
+
+These are measured peak per-step figures on an RTX 5070 Ti Laptop (11.9 GB); the recommendations below are derived from them:
+
+| Stage | Resolution | Per extra sample | Fixed |
+|---|---|---|---|
+| VQ autoencoder | 256 / 384 / 512 | 0.37 / 0.83 / 1.47 GB | ~0.13 GB |
+| Diffusion (incl. VQ, style encoder, EMA) | 256 / 384 / 512 | 0.34 / 0.76 / 1.35 GB | ~0.44 GB |
+| Refiner | 384 | 0.62 GB | ~0.40 GB |
+
+### Recommendations
+
+Only the entries that need changing are listed; leave everything else alone.
+
+| VRAM | What to change |
+|---|---|
+| **8 GB** | `fusion.diffusion.phases[2]` (latent512): `batch_size` 4 → **2**, `gradient_accumulation` 1 → **2** |
+| **12 GB** | **Nothing.** This is the default |
+| **16 GB and above** | Fold the accumulation away into real batches:<br>`fusion.vq.phases[1]` (vq384): batch 3 → **6**, accumulation 2 → **1**<br>`fusion.vq.phases[2]` (vq512): batch 1 → **4**, accumulation 4 → **1**<br>`fusion.direct_baseline.phases[1]`: batch 3 → **6**, accumulation 2 → **1**<br>`fusion.refiner`: batch 2 → **4**, accumulation 2 → **1**<br>`fusion.purification`: batch 2 → **4**, accumulation 2 → **1** |
+
+### The one rule you must not break
+
+**Keep the product `batch_size × gradient_accumulation` unchanged.**
+
+That product is the *effective batch size*, and it determines what the training does. With less VRAM, halve `batch_size` and double `gradient_accumulation`: the gradient works out the same, it is just accumulated in more passes. Change the product and you have changed the training itself, not merely its speed, and the learning rate would need retuning too.
+
+### More VRAM will not make it much faster
+
+This pipeline is **compute bound**, not memory bound. Folding the accumulation away measures 1.06x on diffusion and 1.12x on VQ. A 24 GB card and a 16 GB card run the shipped configuration at essentially the same speed, because there is nothing left to spend the extra memory on short of raising the effective batch size (which changes results) or the resolution.
+
+**Do not expect a bigger card to turn weeks into days.** Wall-clock time is set by GPU compute and character count.
+
+---
+
+## How to edit the configuration
+
+### Where the file is
+
+**`config_months_12gb.json`** in the project root. All four launchers (`run_months_resilient.bat`, `run.sh`, and the rest) pass this one file, so it is the only one to edit.
+
+Any text editor works. **Save it as UTF-8.**
+
+### Finding the setting
+
+The file is nested. A path like `fusion.vq.phases[2].batch_size` reads downwards:
+
+```json
+{
+  "fusion": {                    ← find "fusion"
+    "vq": {                      ← then "vq"
+      "phases": [                ← then "phases", which is a list
+        { "name": "vq256", ... },     ← [0] first
+        { "name": "vq384", ... },     ← [1] second
+        { "name": "vq512",            ← [2] third (counting from 0)
+          "size": 512,
+          "batch_size": 1,       ← this one
+          "gradient_accumulation": 4
+        }
+      ]
+    }
+  }
+}
+```
+
+Every phase has a `name`, so matching on that is the safest way to find it.
+
+### Worked example: an 8 GB card
+
+Under `fusion` → `diffusion` → `phases`, find the block with `"name": "latent512"`:
+
+```json
+{
+  "name": "latent512",
+  "size": 512,
+  "batch_size": 2,             ← was 4
+  "gradient_accumulation": 2,  ← was 1
+  ...leave the rest alone
+}
+```
+
+The product goes from `4 × 1` to `2 × 2`. Still 4, unchanged.
+
+### Before you edit: what throws away existing progress
+
+The program decides whether a checkpoint is still usable by comparing a fingerprint. If it does not match, that stage **restarts from epoch 1** and everything it had trained is discarded.
+
+| What you change | Consequence |
+|---|---|
+| **Anything** inside `fusion.vq.phases[]` | That VQ phase retrains from scratch |
+| **Anything** inside `fusion.diffusion.phases[]` | That diffusion phase retrains from scratch |
+| `fusion.style_encoder`: `size`, `epochs`, `batch_size`, `learning_rate`, `virtual_length`, `references_per_set`, `cell_grid`, `query_gain` | The style stage retrains from scratch |
+| `fusion.refiner`: `size`, `epochs`, `batch_size`, `gradient_accumulation`, `learning_rate` | The refiner retrains from scratch |
+| Anything under `fusion.style_encoder.early_stopping` | **Safe**, takes effect next epoch |
+| `fusion.refiner.minimum_epochs`, `minimum_relative_improvement` | **Safe** |
+| `training.workers`, `training.amp`, any `checkpoint_every_steps`, `preview_every` | **Safe** |
+
+**One easy trap:** for VQ and diffusion, `early_stopping` lives *inside* the phase, so editing it **also** retrains that phase. Style and the refiner do not behave that way.
+
+So: **settle the VRAM settings before you start.** Discovering an out-of-memory error halfway through and fixing it costs you that stage.
+
+### If you run out of memory
+
+`CUDA out of memory` names the stage it happened in (the terminal prints the phase name, such as `vq512` or `latent384`). Then:
+
+1. Halve `batch_size` in that phase
+2. Double `gradient_accumulation` in the same block
+3. Repeat if it still fails
+
+Change only the phase that failed, not all of them.
+
+### Checking you did not break the file
+
+```bash
+./verify.sh
+```
+
+On Windows, double-click `verify_project.bat`. It checks the JSON syntax and the value ranges. The most common JSON mistake is **a missing or extra comma** — the last entry in a block must not have one.
+
+---
+
 ## Getting started
 
 ### Windows

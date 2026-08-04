@@ -108,7 +108,17 @@ class GlyphStyleCNN(nn.Module):
             torch.randn(self.cell_grid * self.cell_grid, style_dim) * 0.02
         )
 
-    def forward(self, glyphs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, glyphs: torch.Tensor) -> torch.Tensor:
+        """The whole-glyph descriptor on its own.
+
+        The diffusion and refiner style losses call this directly and compare
+        the result with a cosine, so it has to stay a single tensor.  Callers
+        that want the cell tokens as well use ``encode``.
+        """
+
+        return self.projection(self.pool(self.features(glyphs)))
+
+    def encode(self, glyphs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         features = self.features(glyphs)
         descriptor = self.projection(self.pool(features))
         cells = self.cell_pool(features).flatten(2).transpose(1, 2)
@@ -185,7 +195,7 @@ class StyleReferenceEncoder(nn.Module):
         batch, count, channels, height, width = references.shape
         if channels != 1:
             raise ValueError("style reference glyphs must be single-channel ink images")
-        descriptors, cells = self.glyph_encoder(references.reshape(batch * count, 1, height, width))
+        descriptors, cells = self.glyph_encoder.encode(references.reshape(batch * count, 1, height, width))
         glyph_tokens = descriptors.reshape(batch, count, self.style_dim)
         cell_tokens = cells.reshape(batch, count * cells.shape[1], self.style_dim)
         # Whole-glyph descriptors keep the global summary stable; the cell

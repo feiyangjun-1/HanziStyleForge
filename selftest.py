@@ -180,6 +180,18 @@ def run_style_expert_selftest() -> None:
             worst = max(worst, float(value))
         return worst
 
+    # The diffusion and refiner style losses call glyph_encoder directly and
+    # feed the result to a cosine. Returning the cell tokens from forward would
+    # only fail once the refiner runs, which is the last stage of the whole
+    # pipeline, so the contract is asserted here rather than discovered there.
+    probe = StyleReferenceEncoder(base=8, style_dim=32, expert_count=experts, heads=4).eval()
+    with torch.no_grad():
+        descriptor = probe.glyph_encoder(torch.rand(3, 1, 64, 64))
+    assert isinstance(descriptor, torch.Tensor) and descriptor.shape == (3, 32), (
+        "GlyphStyleCNN.forward must stay a single whole-glyph descriptor; the "
+        f"style losses index it with a cosine, got {type(descriptor).__name__}"
+    )
+
     healthy = diversity(cell_grid=4, query_gain=16.0)
     assert healthy < 0.75 * ceiling, (
         f"style experts have collapsed: diversity {healthy:.4f} against a "

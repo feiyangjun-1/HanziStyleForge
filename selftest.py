@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -23,10 +25,13 @@ from hanzistyleforge.backends import (
 from hanzistyleforge.build_font import _map_codepoint
 from hanzistyleforge.features import expand_proxy_channels, make_target_aux, split_prediction
 from hanzistyleforge.fusion_diffusion import ExponentialMovingAverage
-from hanzistyleforge.fusion_model import VectorQuantizerEMA
+from hanzistyleforge.fusion_model import StyleReferenceEncoder, VectorQuantizerEMA
+from hanzistyleforge.fusion_dataset import TargetStylePool
 from hanzistyleforge.fusion_selftest import run_fusion_selftest
 from hanzistyleforge.fusion_training import (
     _create_vq_optimizer,
+    _expert_diversity,
+    _significant_improvement,
     _prepare_vq_optimizer_state_dict,
     _repair_vq_optimizer_state_devices,
     _restore_vq_optimizer_backend,
@@ -145,6 +150,175 @@ def run_codebook_selftest() -> None:
     resumed(far)
     assert not torch.allclose(before, torch.zeros_like(before))
     assert set(seeded.state_dict()) == set(VectorQuantizerEMA(embeddings=32, dimension=8).state_dict())
+
+
+def run_style_expert_selftest() -> None:
+    """The style experts must not all be the same vector.
+
+    ExpertStyleModulation blends the experts with a softmax gate gated on local
+    content and diffusion time. If the experts are identical the blend equals
+    any one of them, the gate has no effect at all, and the mixture silently
+    degenerates to a single global FiLM. Measured on a real 42-epoch style
+    checkpoint: pairwise cosine 0.999999, with _expert_diversity pinned at its
+    1 - 1/E ceiling from the very first epoch, while every other metric on the
+    stage looked healthy.
+    """
+
+    experts = 8
+    ceiling = 1.0 - 1.0 / experts
+
+    def diversity(*, cell_grid: int, query_gain: float) -> float:
+        worst = 0.0
+        for seed in range(4):
+            torch.manual_seed(seed)
+            model = StyleReferenceEncoder(
+                base=8, style_dim=32, expert_count=experts, heads=4, cell_grid=cell_grid
+            ).eval()
+            model.query_gain.fill_(query_gain)
+            with torch.no_grad():
+                value = _expert_diversity(model(torch.rand(1, 4, 1, 64, 64))["experts"])
+            worst = max(worst, float(value))
+        return worst
+
+    healthy = diversity(cell_grid=4, query_gain=16.0)
+    assert healthy < 0.75 * ceiling, (
+        f"style experts have collapsed: diversity {healthy:.4f} against a "
+        f"{ceiling:.4f} ceiling means every expert is the same vector"
+    )
+
+    # The failure must stay reproducible, so this is demonstrating a real
+    # difference rather than asserting on something that was never broken.
+    # A flat softmax reads the same average out of every query no matter how
+    # much the values differ.
+    flat = diversity(cell_grid=4, query_gain=1.0)
+    assert flat > 0.90 * ceiling, (
+        f"an unscaled query should still collapse the experts, got {flat:.4f}"
+    )
+
+
+def run_reference_coverage_selftest() -> None:
+    """Reference glyphs must be chosen for what they cover, not at random.
+
+    The style bank is the only place reference glyphs are picked -- the
+    per-sample style_references setting is dead config -- so these few dozen
+    glyphs are the sole style evidence every downstream stage conditions on.
+    Uniform sampling spends slots on parts the set already has. Measured on the
+    real 9584-glyph pool, greedy part coverage lifts distinct parts per group
+    from 15.5 to 22.2 without making the chosen glyphs any denser.
+    """
+
+    rows = []
+    parts: dict[int, frozenset[str]] = {}
+    for index in range(400):
+        codepoint = 0x4E00 + index
+        rows.append({
+            "mode": "self",
+            "split": "train",
+            "codepoint": str(codepoint),
+            "target_path": f"glyph_{index}.png",
+        })
+        # Part 0 is on almost every glyph, so a random draw keeps re-buying it
+        # while the rarer parts go unrepresented.
+        members = {"common"} | {f"p{(index * 7 + step) % 60}" for step in range(3)}
+        parts[codepoint] = frozenset(members)
+
+    with tempfile.TemporaryDirectory() as directory:
+        index_csv = Path(directory) / "index.csv"
+        write_csv(index_csv, rows, ["mode", "split", "codepoint", "target_path"])
+        pool = TargetStylePool(index_csv, split="train")
+        lookup = {str(row["target_path"]): int(row["codepoint"]) for row in rows}
+
+        def covered(paths: list[str]) -> int:
+            return len(set().union(frozenset(), *(parts[lookup[path]] for path in paths)))
+
+        seeds = [11 * step for step in range(8)]
+        random_mean = sum(covered(pool.deterministic_paths(8, seed=s)) for s in seeds) / len(seeds)
+        coverage_mean = sum(
+            covered(pool.coverage_paths(8, parts, seed=s, minimum_parts=1, maximum_parts=8))
+            for s in seeds
+        ) / len(seeds)
+        assert coverage_mean > random_mean * 1.15, (
+            f"part-coverage selection should beat uniform sampling, got "
+            f"{coverage_mean:.2f} against {random_mean:.2f}"
+        )
+
+        first = pool.coverage_paths(8, parts, seed=5, minimum_parts=1, maximum_parts=8)
+        assert first == pool.coverage_paths(8, parts, seed=5, minimum_parts=1, maximum_parts=8), (
+            "reference selection must be reproducible for a given seed"
+        )
+        assert len(set(first)) == len(first), "a reference set must not repeat a glyph"
+        assert first != pool.coverage_paths(8, parts, seed=6, minimum_parts=1, maximum_parts=8), (
+            "different groups must not collapse onto the same glyphs, or the "
+            "style bank carries one reference set repeated"
+        )
+
+        # The IDS data is downloaded at runtime, so an empty part map has to
+        # fall back rather than fail the stage.
+        assert len(pool.coverage_paths(8, {}, seed=1)) == 8
+
+
+def run_early_stopping_selftest() -> None:
+    """A plateaued stage must actually be able to stop.
+
+    Two independent defects kept stages running to their epoch ceiling. The
+    quality gate demanded a median negative similarity at or below 0.20, which
+    a real run sat at 0.213 against, so the gate could never open however long
+    the loss had been flat. And diffusion, the refiner, the contour polisher
+    and the generator counted *raw* improvement, where one 1e-6 best resets
+    patience and buys another full window.
+    """
+
+    def row(loss: float, positive: float, negative: float, epoch: int) -> dict[str, Any]:
+        return {
+            "epoch": epoch,
+            "val_loss": loss,
+            "val_positive_similarity": positive,
+            "val_negative_similarity": negative,
+        }
+
+    # The measured run: excellent separation, but a negative similarity above
+    # the old ceiling. Separation is what the objective asks for, so this must
+    # now be judged ready.
+    measured = [row(0.086, 0.9988, 0.213, epoch) for epoch in range(1, 13)]
+    ready, metrics = _style_quality_gate(
+        measured,
+        window=12,
+        minimum_positive_similarity=0.995,
+        maximum_negative_similarity=0.60,
+        minimum_separation=0.35,
+    )
+    assert ready, f"a well separated encoder must satisfy the gate, got {metrics}"
+    assert abs(metrics["median_separation"] - 0.7858) < 1e-3, metrics
+
+    # The old absolute ceiling is what blocked it, and must remain the thing
+    # that blocks it, so this is a real difference and not a no-op assertion.
+    blocked, _ = _style_quality_gate(
+        measured,
+        window=12,
+        minimum_positive_similarity=0.995,
+        maximum_negative_similarity=0.20,
+        minimum_separation=0.0,
+    )
+    assert not blocked, "the 0.20 ceiling should be what stalled the gate"
+
+    # A genuinely collapsed encoder maps positives and negatives together and
+    # must still be refused, whatever its loss curve looks like.
+    collapsed = [row(0.05, 0.999, 0.97, epoch) for epoch in range(1, 13)]
+    refused, _ = _style_quality_gate(
+        collapsed,
+        window=12,
+        minimum_positive_similarity=0.995,
+        maximum_negative_similarity=0.60,
+        minimum_separation=0.35,
+    )
+    assert not refused, "an encoder with no separation must never be called ready"
+
+    # Noise-sized improvements must not count as progress.
+    assert _significant_improvement(0.0900, 0.1000, 0.001), "a 10% gain is progress"
+    assert not _significant_improvement(0.099999, 0.100000, 0.001), (
+        "a 1e-6 improvement must not reset patience"
+    )
+    assert _significant_improvement(0.5, math.inf, 0.001), "the first value is always progress"
 
 
 def run_training_stage_name_selftest() -> None:
@@ -911,6 +1085,9 @@ def main() -> None:
     assert score.ndim == 4 and features
     run_fusion_selftest()
     run_codebook_selftest()
+    run_style_expert_selftest()
+    run_reference_coverage_selftest()
+    run_early_stopping_selftest()
     run_training_stage_name_selftest()
     run_ema_resume_selftest()
     run_backend_selftest()

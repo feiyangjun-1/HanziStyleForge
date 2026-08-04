@@ -128,6 +128,71 @@ class TargetStylePool:
         rng = random.Random(int(seed))
         return self.sample_paths(rng, min(int(count), max(1, len(self.rows))))
 
+    def coverage_paths(
+        self,
+        count: int,
+        parts: dict[int, frozenset[str]],
+        *,
+        seed: int = 0,
+        candidate_sample: int = 96,
+        minimum_parts: int = 2,
+        maximum_parts: int = 6,
+    ) -> list[str]:
+        """Choose reference glyphs that between them cover the most parts.
+
+        Uniform sampling wastes reference slots on glyphs built from parts the
+        set already has.  Selecting greedily for part coverage instead spends
+        each slot on structure the style encoder has not seen yet.
+
+        The complexity band matters as much as the coverage.  Plain greedy
+        coverage prefers the most component-dense characters available, and
+        those are exactly the ones that turn to mush at the 128px style
+        resolution; one- and two-stroke glyphs carry too little stroke evidence
+        to be worth a slot either.  Candidates are drawn from a random subset at
+        each step rather than the whole pool, which keeps a group's coverage
+        high while leaving different seeds genuinely different groups -- the
+        bank is only useful if its groups are not all the same glyphs.
+        """
+
+        wanted = max(1, min(int(count), len(self.rows)))
+        banded = [
+            row for row in self.rows
+            if minimum_parts <= len(parts.get(int(row["codepoint"]), ())) <= maximum_parts
+        ]
+        # Falling back to the decomposed rows and then to the whole pool keeps
+        # this usable for fonts that barely overlap the IDS data.
+        remaining = banded if len(banded) >= wanted else [
+            row for row in self.rows if parts.get(int(row["codepoint"]))
+        ]
+        if len(remaining) < wanted:
+            return self.deterministic_paths(wanted, seed=seed)
+
+        rng = random.Random(int(seed))
+        remaining = list(remaining)
+        rng.shuffle(remaining)
+        covered: set[str] = set()
+        selected: list[dict[str, Any]] = []
+        while len(selected) < wanted and remaining:
+            window = min(len(remaining), max(1, int(candidate_sample)))
+            best_index = 0
+            best_key = (-1, 0)
+            for index in range(window):
+                glyph = parts.get(int(remaining[index]["codepoint"]), frozenset())
+                # Prefer the most new parts, then the simpler glyph, so ties go
+                # to the cleaner exemplar rather than the densest one.
+                key = (len(glyph - covered), -len(glyph))
+                if key > best_key:
+                    best_key = key
+                    best_index = index
+            if best_key[0] <= 0:
+                # Everything in this window is already covered; reshuffling
+                # keeps the remaining slots from degenerating into pool order.
+                rng.shuffle(remaining)
+            chosen = remaining.pop(best_index)
+            covered |= parts.get(int(chosen["codepoint"]), frozenset())
+            selected.append(chosen)
+        return [str(row["target_path"]) for row in selected]
+
 
 class StyleEncoderPretrainDataset(Dataset):
     """Synthetic pseudo-font task for a target-only style encoder.

@@ -61,16 +61,24 @@ class ResBlock(nn.Module):
 
 
 class GlyphStyleCNN(nn.Module):
-    """Encode one rendered target glyph into a style descriptor.
+    """Encode one rendered target glyph into style descriptors.
 
     It deliberately receives the rendered target glyph rather than the content
     proxy.  This prevents the content pathway from becoming the sole carrier of
     stroke weight, terminal shape, roundness and visual-size information.
+
+    Two views come out.  The whole-glyph descriptor summarizes the glyph in one
+    vector.  The cell tokens keep a coarse spatial grid, because whole-glyph
+    descriptors of one style are near-identical by design -- measured pairwise
+    cosine 0.996 across eight different characters -- and no attention pattern,
+    however sharp, can read distinguishable outputs out of near-identical
+    values.  The cells are what give the expert queries something to separate.
     """
 
-    def __init__(self, base: int = 32, style_dim: int = 256) -> None:
+    def __init__(self, base: int = 32, style_dim: int = 256, cell_grid: int = 4) -> None:
         super().__init__()
         b = int(base)
+        self.cell_grid = max(1, int(cell_grid))
         self.features = nn.Sequential(
             ConvNormAct(1, b, 5, stride=2),
             ResBlock(b, b),
@@ -88,18 +96,38 @@ class GlyphStyleCNN(nn.Module):
             nn.LayerNorm(style_dim),
             nn.SiLU(inplace=True),
         )
+        self.cell_pool = nn.AdaptiveAvgPool2d((self.cell_grid, self.cell_grid))
+        self.cell_projection = nn.Sequential(
+            nn.Linear(b * 6, style_dim),
+            nn.LayerNorm(style_dim),
+            nn.SiLU(inplace=True),
+        )
+        # A learned grid embedding lets a query prefer a region rather than
+        # having to recognize it from content alone.
+        self.cell_position = nn.Parameter(
+            torch.randn(self.cell_grid * self.cell_grid, style_dim) * 0.02
+        )
 
-    def forward(self, glyphs: torch.Tensor) -> torch.Tensor:
-        return self.projection(self.pool(self.features(glyphs)))
+    def forward(self, glyphs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        features = self.features(glyphs)
+        descriptor = self.projection(self.pool(features))
+        cells = self.cell_pool(features).flatten(2).transpose(1, 2)
+        return descriptor, self.cell_projection(cells) + self.cell_position
 
 
 class StyleReferenceEncoder(nn.Module):
     """Aggregate multiple target glyphs into global and localized style tokens.
 
-    Learned expert queries attend to different target reference glyphs.  The
-    result is analogous to a collection of localized experts: one token can
-    specialize in terminals, another in dense intersections, another in round
-    counters, without requiring semantic component labels during inference.
+    Learned expert queries attend over the whole-glyph descriptors and the
+    per-cell tokens of every reference glyph.  The result is a collection of
+    localized experts: one token can specialize in terminals, another in dense
+    intersections, another in round counters, without requiring semantic
+    component labels during inference.
+
+    Two conditions are both required for that specialization, and dropping
+    either one collapses the whole expert set to a single repeated vector: the
+    values must actually differ from each other (the cell tokens), and the
+    softmax must be allowed to be selective (``query_gain``).
     """
 
     def __init__(
@@ -109,12 +137,29 @@ class StyleReferenceEncoder(nn.Module):
         expert_count: int = 8,
         heads: int = 8,
         synthetic_parameter_count: int = 7,
+        cell_grid: int = 4,
+        query_gain: float = 16.0,
     ) -> None:
         super().__init__()
         self.style_dim = int(style_dim)
         self.expert_count = int(expert_count)
-        self.glyph_encoder = GlyphStyleCNN(base=base, style_dim=style_dim)
+        self.glyph_encoder = GlyphStyleCNN(base=base, style_dim=style_dim, cell_grid=cell_grid)
         self.expert_queries = nn.Parameter(torch.randn(expert_count, style_dim) * 0.02)
+        # Raw queries of this size leave the attention logits so small that the
+        # softmax is uniform to three decimals, and a uniform softmax makes
+        # every expert read out the same average of the values.  That collapsed
+        # the whole expert set to one vector: measured on a real 42-epoch
+        # checkpoint, pairwise cosine 0.999999 and the diversity penalty pinned
+        # at its 1 - 1/E ceiling from the first epoch onwards.  Normalizing the
+        # queries and applying an explicit inverse temperature makes the
+        # magnitude a stated choice instead of an accident of the initializer.
+        # A gain of 16 measures 0.36 diversity at init and 0.06 after training,
+        # against the 0.875 ceiling.  It is a buffer rather than a parameter so
+        # that weight decay cannot quietly walk it back to zero.
+        self.query_norm = nn.LayerNorm(style_dim)
+        self.register_buffer(
+            "query_gain", torch.tensor(float(query_gain)), persistent=False
+        )
         self.attention = nn.MultiheadAttention(style_dim, heads, dropout=0.05, batch_first=True)
         self.post = nn.Sequential(
             nn.LayerNorm(style_dim),
@@ -140,10 +185,15 @@ class StyleReferenceEncoder(nn.Module):
         batch, count, channels, height, width = references.shape
         if channels != 1:
             raise ValueError("style reference glyphs must be single-channel ink images")
-        encoded = self.glyph_encoder(references.reshape(batch * count, 1, height, width))
-        glyph_tokens = encoded.reshape(batch, count, self.style_dim)
-        queries = self.expert_queries.unsqueeze(0).expand(batch, -1, -1)
-        experts, _ = self.attention(queries, glyph_tokens, glyph_tokens, need_weights=False)
+        descriptors, cells = self.glyph_encoder(references.reshape(batch * count, 1, height, width))
+        glyph_tokens = descriptors.reshape(batch, count, self.style_dim)
+        cell_tokens = cells.reshape(batch, count * cells.shape[1], self.style_dim)
+        # Whole-glyph descriptors keep the global summary stable; the cell
+        # tokens supply the variation the experts separate on.
+        memory = torch.cat([glyph_tokens, cell_tokens], dim=1)
+        queries = self.query_norm(self.expert_queries) * self.query_gain
+        queries = queries.unsqueeze(0).expand(batch, -1, -1)
+        experts, _ = self.attention(queries, memory, memory, need_weights=False)
         experts = experts + self.post(experts)
         global_style = self.global_projection(experts.mean(dim=1))
         synthetic = self.synthetic_head(global_style)

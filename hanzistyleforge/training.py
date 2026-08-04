@@ -105,6 +105,7 @@ def _save_checkpoint(
     global_step: int = 0,
     epoch_complete: bool = True,
     no_improvement: int = 0,
+    significant_best: float = math.inf,
 ) -> None:
     ensure_dir(path.parent)
     temp = path.with_suffix(path.suffix + ".tmp")
@@ -118,6 +119,7 @@ def _save_checkpoint(
         "global_step": int(global_step),
         "epoch_complete": bool(epoch_complete),
         "no_improvement": int(no_improvement),
+        "significant_best": float(significant_best),
         "best_loss": float(best_loss),
         "dataset_hash": dataset_hash,
         "model_state": model.state_dict(),
@@ -520,6 +522,7 @@ def _run_phase(
         global_step = int(checkpoint.get("global_step", 0))
         best_loss = float(checkpoint.get("best_loss", math.inf))
         no_improvement = int(checkpoint.get("no_improvement", 0))
+        significant_best = float(checkpoint.get("significant_best", best_loss))
         if history_path.exists():
             with history_path.open("r", encoding="utf-8-sig", newline="") as file:
                 history = list(csv.DictReader(file))
@@ -527,7 +530,13 @@ def _run_phase(
     epochs = int(phase["epochs"])
     accumulation = max(1, int(phase.get("gradient_accumulation", 1)))
     patience = int(phase.get("early_stopping_patience", 8))
+    # Patience counts epochs without *significant* progress.  Against a raw
+    # comparison a 1e-5 improvement resets the counter and buys another full
+    # window, so a phase that plateaued long ago still runs to its ceiling.
+    relative_improvement = max(0.0, float(phase.get("minimum_relative_improvement", 0.001)))
+    minimum_epochs = max(1, int(phase.get("minimum_epochs", 1)))
     no_improvement = int(locals().get("no_improvement", 0))
+    significant_best = float(locals().get("significant_best", math.inf))
     checkpoint_every_steps = max(0, int(cfg["training"].get("checkpoint_every_steps", 250)))
     started = time.time()
     adv_start = int(phase.get("adversarial_start_epoch", adv_cfg.get("start_epoch", max(2, epochs // 3))))
@@ -615,6 +624,7 @@ def _run_phase(
                         global_step=global_step,
                         epoch_complete=False,
                         no_improvement=no_improvement,
+                        significant_best=significant_best,
                     )
                     longrun_guard.checkpoint_boundary()
 
@@ -622,9 +632,17 @@ def _run_phase(
         _enforce_style_guard(cfg, phase, epoch, validation, phase_dir)
         scheduler.step(validation["loss"])
         improved = validation["loss"] < best_loss - 1e-5
+        significant = (
+            not math.isfinite(significant_best)
+            or validation["loss"] < significant_best * (1.0 - relative_improvement)
+        )
+        if significant:
+            significant_best = validation["loss"]
+            no_improvement = 0
+        else:
+            no_improvement += 1
         if improved:
             best_loss = validation["loss"]
-            no_improvement = 0
             _save_checkpoint(
                 best_path,
                 model,
@@ -644,9 +662,8 @@ def _run_phase(
                 global_step=global_step,
                 epoch_complete=True,
                 no_improvement=no_improvement,
+                significant_best=significant_best,
             )
-        else:
-            no_improvement += 1
         _save_checkpoint(
             last_path,
             model,
@@ -666,6 +683,7 @@ def _run_phase(
             global_step=global_step,
             epoch_complete=True,
             no_improvement=no_improvement,
+            significant_best=significant_best,
         )
         in_epoch_path.unlink(missing_ok=True)
         longrun_guard.checkpoint_boundary()
@@ -693,7 +711,11 @@ def _run_phase(
         if epoch == 1 or epoch % int(cfg["training"].get("preview_every", 2)) == 0 or improved:
             _save_preview(model, ema.shadow, val_loader, device, amp_enabled, previews / f"epoch_{epoch:03d}.png")
         resume_replayed_step = 0
-        if patience > 0 and no_improvement >= patience:
+        if patience > 0 and epoch >= minimum_epochs and no_improvement >= patience:
+            print(
+                f"{phase['name']} early stopping: validation has reached a "
+                f"significant-improvement plateau, epoch={epoch}, stale={no_improvement}."
+            )
             break
 
     if not best_path.exists():

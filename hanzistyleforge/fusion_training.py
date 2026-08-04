@@ -24,6 +24,8 @@ from .runtime import resolve_device
 from .component_atlas import build_component_atlas
 from .contour_polish import ContourDenoiseDataset, build_contour_cache
 from .dataset import GlyphStyleDataset
+from .decomposition import glyph_part_sets, load_decompositions
+from .ids_data import IDSDataError, ensure_decomposition_data
 from .features import ink_probability
 from .fusion_dataset import (
     FusionDiffusionDataset,
@@ -278,6 +280,20 @@ def _read_history(path: Path) -> list[dict[str, Any]]:
         return list(csv.DictReader(handle))
 
 
+def _resume_history(path: Path, resume: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Read a stage history, discarding rows left behind by another model.
+
+    Without a compatible checkpoint the stage restarts at epoch 1, so whatever
+    is on disk was written under a different fingerprint.  Keeping it would
+    duplicate epoch numbers in the CSV and feed plateau detection and the
+    early-stop quality gate metrics the current model never produced.
+    """
+
+    if resume is None:
+        return []
+    return _read_history(path)
+
+
 def _font() -> ImageFont.ImageFont:
     try:
         return ImageFont.truetype("arial.ttf", 15)
@@ -392,12 +408,28 @@ def _style_plateau_state(
     return significant_best, last_significant_epoch, stale_epochs
 
 
+def _significant_improvement(value: float, reference: float, relative: float) -> bool:
+    """Is this validation loss a real step forward, or just noise?
+
+    Counting any improvement at all makes patience meaningless on a noisy
+    curve: one 1e-6 best at epoch 90 buys another full patience window, so a
+    stage that stopped progressing weeks ago still runs to its epoch ceiling.
+    Requiring each new best to clear the last significant one by a relative
+    margin is what makes patience mean "epochs without progress".
+    """
+
+    if not math.isfinite(reference):
+        return True
+    return value < reference * (1.0 - max(0.0, float(relative)))
+
+
 def _style_quality_gate(
     history: list[dict[str, Any]],
     *,
     window: int,
     minimum_positive_similarity: float,
     maximum_negative_similarity: float,
+    minimum_separation: float = 0.0,
 ) -> tuple[bool, dict[str, float]]:
     recent = history[-max(1, int(window)) :]
     positives = [
@@ -417,12 +449,22 @@ def _style_quality_gate(
         }
     positive = float(np.median(np.asarray(positives, dtype=np.float64)))
     negative = float(np.median(np.asarray(negatives, dtype=np.float64)))
+    # Separation is the quantity the contrastive objective actually asks for,
+    # and unlike an absolute ceiling on the negative it is reachable.  Positive
+    # and negative styles are drawn from the same distribution, with the
+    # negative additionally identity with probability 0.12, so a well
+    # calibrated encoder is *supposed* to score some negatives highly and the
+    # absolute negative similarity has an irreducible floor.  A run measured at
+    # median 0.213 against a 0.200 ceiling could never satisfy the gate and so
+    # never stopped early, however long it had been on a plateau.
     return (
         positive >= float(minimum_positive_similarity)
         and negative <= float(maximum_negative_similarity)
+        and (positive - negative) >= float(minimum_separation)
     ), {
         "median_positive_similarity": positive,
         "median_negative_similarity": negative,
+        "median_separation": positive - negative,
     }
 
 
@@ -458,6 +500,8 @@ def train_style_encoder(cfg: dict[str, Any]) -> dict[str, Any]:
         "expert_count": int(fusion.get("expert_count", 8)),
         "heads": int(style_cfg.get("heads", 8)),
         "synthetic_parameters": 7,
+        "cell_grid": int(style_cfg.get("cell_grid", 4)),
+        "query_gain": float(style_cfg.get("query_gain", 16.0)),
     }
     phase = {
         "style_size": int(style_cfg.get("size", 128)),
@@ -474,6 +518,8 @@ def train_style_encoder(cfg: dict[str, Any]) -> dict[str, Any]:
         expert_count=model_spec["expert_count"],
         heads=model_spec["heads"],
         synthetic_parameter_count=7,
+        cell_grid=model_spec["cell_grid"],
+        query_gain=model_spec["query_gain"],
     ).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -504,8 +550,8 @@ def train_style_encoder(cfg: dict[str, Any]) -> dict[str, Any]:
     best = math.inf
     start_epoch = 1
     global_step = 0
-    history = _read_history(root / "history.csv")
     _, resume = _load_resume(root, fingerprint)
+    history = _resume_history(root / "history.csv", resume)
     if resume is not None:
         model.load_state_dict(resume["model"], strict=True)
         optimizer.load_state_dict(resume["optimizer"])
@@ -524,8 +570,11 @@ def train_style_encoder(cfg: dict[str, Any]) -> dict[str, Any]:
         0.0, float(early_cfg.get("minimum_relative_improvement", 0.002))
     )
     early_quality_window = max(1, int(early_cfg.get("quality_window", 20)))
-    early_positive_minimum = float(early_cfg.get("positive_similarity_minimum", 0.999))
-    early_negative_maximum = float(early_cfg.get("negative_similarity_maximum", 0.15))
+    early_positive_minimum = float(early_cfg.get("positive_similarity_minimum", 0.995))
+    early_negative_maximum = float(early_cfg.get("negative_similarity_maximum", 0.60))
+    early_separation_minimum = float(
+        early_cfg.get("separation_minimum", style_cfg.get("contrastive_margin", 0.35))
+    )
     significant_best, last_significant_epoch, stale_epochs = _style_plateau_state(
         history,
         through_epoch=start_epoch - 1,
@@ -672,6 +721,7 @@ def train_style_encoder(cfg: dict[str, Any]) -> dict[str, Any]:
             window=early_quality_window,
             minimum_positive_similarity=early_positive_minimum,
             maximum_negative_similarity=early_negative_maximum,
+            minimum_separation=early_separation_minimum,
         )
         if (
             early_enabled
@@ -696,6 +746,7 @@ def train_style_encoder(cfg: dict[str, Any]) -> dict[str, Any]:
                 "quality_window": early_quality_window,
                 "positive_similarity_minimum": early_positive_minimum,
                 "negative_similarity_maximum": early_negative_maximum,
+                "separation_minimum": early_separation_minimum,
                 **quality_metrics,
             })
             print(
@@ -724,11 +775,24 @@ def train_style_encoder(cfg: dict[str, Any]) -> dict[str, Any]:
     pool = TargetStylePool(index_path, split="train")
     group_count = max(4, int(style_cfg.get("style_bank_groups", 32)))
     reference_count = phase["references"]
+    reference_parts = _reference_part_sets(cfg)
     bank_experts: list[torch.Tensor] = []
     bank_globals: list[torch.Tensor] = []
+    bank_paths: list[list[str]] = []
     with torch.no_grad():
         for group in range(group_count):
-            paths = pool.deterministic_paths(reference_count, seed=int(cfg["training"].get("seed", 0)) + group * 101)
+            seed = int(cfg["training"].get("seed", 0)) + group * 101
+            if reference_parts:
+                paths = pool.coverage_paths(
+                    reference_count,
+                    reference_parts,
+                    seed=seed,
+                    minimum_parts=int(style_cfg.get("reference_minimum_parts", 2)),
+                    maximum_parts=int(style_cfg.get("reference_maximum_parts", 6)),
+                )
+            else:
+                paths = pool.deterministic_paths(reference_count, seed=seed)
+            bank_paths.append(paths)
             glyphs = np.stack([read_ink_image(path, phase["style_size"]) for path in paths], axis=0)[None, :, None]
             tensor = torch.from_numpy(glyphs.astype(np.float32)).to(device)
             output = model(tensor)
@@ -743,8 +807,27 @@ def train_style_encoder(cfg: dict[str, Any]) -> dict[str, Any]:
         "mean_global": torch.stack(bank_globals).mean(dim=0),
         "reference_count": reference_count,
         "group_count": group_count,
+        "reference_selection": "part_coverage" if reference_parts else "uniform_random",
     }
     _atomic_torch_save(style_bank, root / "style_bank.pt")
+    path_codepoints = {str(row["target_path"]): int(row["codepoint"]) for row in pool.rows}
+    group_characters = [
+        [chr(path_codepoints[path]) for path in paths if path in path_codepoints]
+        for paths in bank_paths
+    ]
+    save_json(root / "style_bank_references.json", {
+        "selection": style_bank["reference_selection"],
+        "group_count": group_count,
+        "reference_count": reference_count,
+        "distinct_parts_per_group": [
+            len(set().union(frozenset(), *(
+                reference_parts.get(path_codepoints.get(path, -1), frozenset())
+                for path in paths
+            )))
+            for paths in bank_paths
+        ],
+        "groups": ["".join(characters) for characters in group_characters],
+    })
     summary = {
         "enabled": True,
         "checkpoint": str((root / "best.pt").resolve()),
@@ -761,6 +844,30 @@ def train_style_encoder(cfg: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _reference_part_sets(cfg: dict[str, Any]) -> dict[int, frozenset[str]]:
+    """Part inventory per glyph, or empty if the IDS data is unavailable.
+
+    The decomposition data is downloaded at runtime rather than bundled, so
+    every caller has to tolerate its absence.  An empty mapping means reference
+    selection falls back to uniform sampling instead of failing the stage.
+    """
+
+    component_cfg = cfg.get("fusion", {}).get("component_atlas", {})
+    try:
+        decomposition_path, _ = ensure_decomposition_data(component_cfg)
+    except IDSDataError as exc:
+        print(f"Part-coverage reference selection is unavailable: {exc}")
+        return {}
+    if not Path(decomposition_path).is_file():
+        return {}
+    decompositions = load_decompositions(
+        decomposition_path,
+        region_priority=component_cfg.get("region_priority", []),
+        include_obsolete=bool(component_cfg.get("include_obsolete", False)),
+    )
+    return glyph_part_sets(decompositions)
+
+
 def load_style_encoder(cfg: dict[str, Any], device: torch.device | str) -> tuple[StyleReferenceEncoder, dict[str, Any]]:
     path = Path(cfg["paths"]["work_dir"]) / "fusion" / "style" / "best.pt"
     payload = torch.load(path, map_location=device, weights_only=False)
@@ -771,6 +878,8 @@ def load_style_encoder(cfg: dict[str, Any], device: torch.device | str) -> tuple
         expert_count=int(spec["expert_count"]),
         heads=int(spec["heads"]),
         synthetic_parameter_count=int(spec.get("synthetic_parameters", 7)),
+        cell_grid=int(spec.get("cell_grid", 4)),
+        query_gain=float(spec.get("query_gain", 16.0)),
     )
     model.load_state_dict(payload["model"], strict=True)
     return model.to(device).eval(), spec
@@ -923,7 +1032,7 @@ def train_vqvae(cfg: dict[str, Any]) -> dict[str, Any]:
             max(1, int(phase["batch_size"])), workers, shuffle=False,
         )
         accumulation = max(1, int(phase.get("gradient_accumulation", 1)))
-        history = _read_history(phase_dir / "history.csv")
+        history = _resume_history(phase_dir / "history.csv", resume)
         checkpoint_every = max(20, int(vq_cfg.get("checkpoint_every_steps", 240)))
         validation_batches = max(0, int(vq_cfg.get("validation_batches", 64)))
         metric_sync_every = max(4, int(vq_cfg.get("metric_sync_every_steps", 16)))
@@ -1504,6 +1613,7 @@ def _save_diffusion_checkpoint(
     no_improvement: int,
     model_spec: dict[str, Any],
     validation: dict[str, float] | None = None,
+    significant_best: float = math.inf,
 ) -> None:
     _atomic_torch_save({
         "fingerprint": fingerprint,
@@ -1516,6 +1626,7 @@ def _save_diffusion_checkpoint(
         "global_step": int(global_step),
         "best": float(best),
         "no_improvement": int(no_improvement),
+        "significant_best": float(significant_best),
         "model_spec": model_spec,
         "validation": validation or {},
     }, path)
@@ -1583,6 +1694,9 @@ def _train_diffusion_phase(
     global_step = 0
     best = math.inf
     no_improvement = 0
+    significant_best = math.inf
+    early_relative = max(0.0, float(phase.get("minimum_relative_improvement", 0.001)))
+    early_minimum_epochs = max(1, int(phase.get("minimum_epochs", 1)))
     if resume is not None:
         model.load_state_dict(resume["model"], strict=True)
         if resume.get("ema"):
@@ -1596,6 +1710,7 @@ def _train_diffusion_phase(
         global_step = int(resume.get("global_step", 0))
         best = float(resume.get("best", math.inf))
         no_improvement = int(resume.get("no_improvement", 0))
+        significant_best = float(resume.get("significant_best", best))
     size = int(phase["size"])
     style_size = int(cfg["fusion"].get("style_encoder", {}).get("size", 128))
     style_refs = int(cfg["fusion"].get("style_encoder", {}).get("inference_references", 12))
@@ -1613,7 +1728,7 @@ def _train_diffusion_phase(
     val_loader = _loader(val_dataset, max(1, int(phase["batch_size"])), workers, shuffle=False)
     criterion = _efficient_glyph_criterion(diffusion_cfg, cfg.get("loss", {}).get("weights", {})).to(device)
     accumulation = max(1, int(phase.get("gradient_accumulation", 1)))
-    history = _read_history(phase_dir / "history.csv")
+    history = _resume_history(phase_dir / "history.csv", resume)
     checkpoint_every = max(20, int(diffusion_cfg.get("checkpoint_every_steps", 120)))
     guard = LongRunGuard(cfg)
     started = time.time()
@@ -1645,6 +1760,7 @@ def _train_diffusion_phase(
                         optimizer=optimizer, scheduler=scheduler_lr, scaler=scaler,
                         epoch=epoch - 1, global_step=global_step, best=best,
                         no_improvement=no_improvement, model_spec=model_spec,
+                        significant_best=significant_best,
                     )
                     guard.checkpoint_boundary()
             count = int(batch["proxy"].shape[0])
@@ -1664,6 +1780,11 @@ def _train_diffusion_phase(
         improved = validation["loss"] < best - float(phase.get("minimum_improvement", 1e-5))
         if improved:
             best = validation["loss"]
+        # best.pt tracks the genuinely best weights; patience counts only
+        # significant progress.  Conflating the two is what kept this phase
+        # running to its epoch ceiling on an otherwise flat curve.
+        if _significant_improvement(validation["loss"], significant_best, early_relative):
+            significant_best = validation["loss"]
             no_improvement = 0
         else:
             no_improvement += 1
@@ -1671,14 +1792,14 @@ def _train_diffusion_phase(
             phase_dir / "last.pt", fingerprint=fingerprint, model=model, ema=ema,
             optimizer=optimizer, scheduler=scheduler_lr, scaler=scaler,
             epoch=epoch, global_step=global_step, best=best, no_improvement=no_improvement,
-            model_spec=model_spec, validation=validation,
+            model_spec=model_spec, validation=validation, significant_best=significant_best,
         )
         if improved:
             _save_diffusion_checkpoint(
                 phase_dir / "best.pt", fingerprint=fingerprint, model=model, ema=ema,
                 optimizer=optimizer, scheduler=scheduler_lr, scaler=scaler,
                 epoch=epoch, global_step=global_step, best=best, no_improvement=no_improvement,
-                model_spec=model_spec, validation=validation,
+                model_spec=model_spec, validation=validation, significant_best=significant_best,
             )
         (phase_dir / "in_epoch.pt").unlink(missing_ok=True)
         history.append({
@@ -1698,7 +1819,24 @@ def _train_diffusion_phase(
                     output=phase_dir / "previews" / f"epoch_{epoch:03d}.png",
                 )
         guard.checkpoint_boundary()
-        if no_improvement >= int(phase.get("patience", 48)):
+        if epoch >= early_minimum_epochs and no_improvement >= int(phase.get("patience", 48)):
+            save_json(phase_dir / "EARLY_STOP.json", {
+                "stage": phase["name"],
+                "reason": "significant_validation_plateau",
+                "epoch": epoch,
+                "maximum_epochs": phase["epochs"],
+                "stale_epochs": no_improvement,
+                "significant_best_validation_loss": significant_best,
+                "raw_best_validation_loss": best,
+                "minimum_relative_improvement": early_relative,
+                "patience": int(phase.get("patience", 48)),
+                "minimum_epochs": early_minimum_epochs,
+            })
+            print(
+                f"{phase['name']} early stopping: validation has reached a "
+                f"significant-improvement plateau, epoch={epoch}, "
+                f"stale={no_improvement}."
+            )
             break
     save_json(completed_path, {"fingerprint": fingerprint, "best": best})
     payload = torch.load(phase_dir / "best.pt", map_location=device, weights_only=False)
@@ -2032,6 +2170,9 @@ def train_fusion_refiner(cfg: dict[str, Any]) -> dict[str, Any]:
     global_step = 0
     best = math.inf
     no_improvement = 0
+    significant_best = math.inf
+    early_relative = max(0.0, float(ref_cfg.get("minimum_relative_improvement", 0.001)))
+    early_minimum_epochs = max(1, int(ref_cfg.get("minimum_epochs", 1)))
     if resume is not None:
         model.load_state_dict(resume["model"], strict=True)
         if resume.get("ema"):
@@ -2043,6 +2184,7 @@ def train_fusion_refiner(cfg: dict[str, Any]) -> dict[str, Any]:
         global_step = int(resume.get("global_step", 0))
         best = float(resume.get("best", math.inf))
         no_improvement = int(resume.get("no_improvement", 0))
+        significant_best = float(resume.get("significant_best", best))
     train_loader = _loader(
         FusionRefinerDataset(
             index_path, split="train", size=phase["size"], style_size=phase["style_size"],
@@ -2061,7 +2203,7 @@ def train_fusion_refiner(cfg: dict[str, Any]) -> dict[str, Any]:
     )
     criterion = _efficient_glyph_criterion(ref_cfg, cfg.get("loss", {}).get("weights", {})).to(device)
     accumulation = max(1, phase["gradient_accumulation"])
-    history = _read_history(root / "history.csv")
+    history = _resume_history(root / "history.csv", resume)
     guard = LongRunGuard(cfg)
     checkpoint_every = max(20, int(ref_cfg.get("checkpoint_every_steps", 100)))
 
@@ -2142,6 +2284,8 @@ def train_fusion_refiner(cfg: dict[str, Any]) -> dict[str, Any]:
         improved = validation["loss"] < best
         if improved:
             best = validation["loss"]
+        if _significant_improvement(validation["loss"], significant_best, early_relative):
+            significant_best = validation["loss"]
             no_improvement = 0
         else:
             no_improvement += 1
@@ -2150,7 +2294,7 @@ def train_fusion_refiner(cfg: dict[str, Any]) -> dict[str, Any]:
             "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
             "scaler": scaler.state_dict(), "epoch": epoch, "global_step": global_step,
             "best": best, "no_improvement": no_improvement, "model_spec": model_spec,
-            "validation": validation,
+            "validation": validation, "significant_best": significant_best,
         }
         _atomic_torch_save(payload, root / "last.pt")
         if improved:
@@ -2178,7 +2322,23 @@ def train_fusion_refiner(cfg: dict[str, Any]) -> dict[str, Any]:
                 [int(value) for value in batch["codepoint"]],
             )
         guard.checkpoint_boundary()
-        if no_improvement >= int(ref_cfg.get("patience", 44)):
+        if epoch >= early_minimum_epochs and no_improvement >= int(ref_cfg.get("patience", 44)):
+            save_json(root / "EARLY_STOP.json", {
+                "stage": "fusion_refiner",
+                "reason": "significant_validation_plateau",
+                "epoch": epoch,
+                "maximum_epochs": phase["epochs"],
+                "stale_epochs": no_improvement,
+                "significant_best_validation_loss": significant_best,
+                "raw_best_validation_loss": best,
+                "minimum_relative_improvement": early_relative,
+                "patience": int(ref_cfg.get("patience", 44)),
+                "minimum_epochs": early_minimum_epochs,
+            })
+            print(
+                "Fusion refiner early stopping: validation has reached a "
+                f"significant-improvement plateau, epoch={epoch}, stale={no_improvement}."
+            )
             break
     summary = {
         "enabled": True,
@@ -2251,6 +2411,9 @@ def train_contour_polisher(cfg: dict[str, Any]) -> dict[str, Any]:
     best = math.inf
     no_improvement = 0
     global_step = 0
+    significant_best = math.inf
+    early_relative = max(0.0, float(contour_cfg.get("minimum_relative_improvement", 0.001)))
+    early_minimum_epochs = max(1, int(contour_cfg.get("minimum_epochs", 1)))
     if resume is not None:
         model.load_state_dict(resume["model"], strict=True)
         optimizer.load_state_dict(resume["optimizer"])
@@ -2260,7 +2423,8 @@ def train_contour_polisher(cfg: dict[str, Any]) -> dict[str, Any]:
         best = float(resume.get("best", math.inf))
         no_improvement = int(resume.get("no_improvement", 0))
         global_step = int(resume.get("global_step", 0))
-    history = _read_history(root / "history.csv")
+        significant_best = float(resume.get("significant_best", best))
+    history = _resume_history(root / "history.csv", resume)
     guard = LongRunGuard(cfg)
 
     def contour_loss(batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
@@ -2320,6 +2484,8 @@ def train_contour_polisher(cfg: dict[str, Any]) -> dict[str, Any]:
         improved = validation["loss"] < best
         if improved:
             best = validation["loss"]
+        if _significant_improvement(validation["loss"], significant_best, early_relative):
+            significant_best = validation["loss"]
             no_improvement = 0
         else:
             no_improvement += 1
@@ -2328,7 +2494,7 @@ def train_contour_polisher(cfg: dict[str, Any]) -> dict[str, Any]:
             "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
             "scaler": scaler.state_dict(), "epoch": epoch, "global_step": global_step,
             "best": best, "no_improvement": no_improvement, "spec": spec,
-            "validation": validation,
+            "validation": validation, "significant_best": significant_best,
         }
         _atomic_torch_save(payload, root / "last.pt")
         if improved:
@@ -2340,7 +2506,23 @@ def train_contour_polisher(cfg: dict[str, Any]) -> dict[str, Any]:
         })
         _write_history(root / "history.csv", history)
         guard.checkpoint_boundary()
-        if no_improvement >= int(contour_cfg.get("patience", 28)):
+        if epoch >= early_minimum_epochs and no_improvement >= int(contour_cfg.get("patience", 28)):
+            save_json(root / "EARLY_STOP.json", {
+                "stage": "contour_polisher",
+                "reason": "significant_validation_plateau",
+                "epoch": epoch,
+                "maximum_epochs": phase["epochs"],
+                "stale_epochs": no_improvement,
+                "significant_best_validation_loss": significant_best,
+                "raw_best_validation_loss": best,
+                "minimum_relative_improvement": early_relative,
+                "patience": int(contour_cfg.get("patience", 28)),
+                "minimum_epochs": early_minimum_epochs,
+            })
+            print(
+                "Contour polisher early stopping: validation has reached a "
+                f"significant-improvement plateau, epoch={epoch}, stale={no_improvement}."
+            )
             break
     summary = {
         "enabled": True,

@@ -275,6 +275,8 @@
       "size": 128,
       "base_channels": 36,
       "heads": 8,
+      "cell_grid": 4,
+      "query_gain": 16.0,
       "references_per_set": 8,
       "inference_references": 8,
       "style_bank_groups": 12,
@@ -293,7 +295,8 @@
         "minimum_relative_improvement": 0.001,
         "quality_window": 12,
         "positive_similarity_minimum": 0.995,
-        "negative_similarity_maximum": 0.2
+        "negative_similarity_maximum": 0.6,
+        "separation_minimum": 0.35
       }
     },
     "vq": {
@@ -324,7 +327,8 @@
           "patience": 10,
           "early_stopping": {
             "minimum_epochs": 24,
-            "patience": 10
+            "patience": 10,
+            "minimum_relative_improvement": 0.001
           }
         },
         {
@@ -338,7 +342,8 @@
           "patience": 8,
           "early_stopping": {
             "minimum_epochs": 16,
-            "patience": 8
+            "patience": 8,
+            "minimum_relative_improvement": 0.001
           }
         },
         {
@@ -352,7 +357,8 @@
           "patience": 6,
           "early_stopping": {
             "minimum_epochs": 10,
-            "patience": 6
+            "patience": 6,
+            "minimum_relative_improvement": 0.001
           }
         }
       ],
@@ -381,7 +387,9 @@
           "learning_rate": 0.00017,
           "minimum_learning_rate": 1e-06,
           "early_stopping_patience": 16,
-          "adversarial": false
+          "adversarial": false,
+          "minimum_epochs": 24,
+          "minimum_relative_improvement": 0.001
         },
         {
           "name": "direct384",
@@ -392,7 +400,9 @@
           "learning_rate": 4.5e-05,
           "minimum_learning_rate": 5e-07,
           "early_stopping_patience": 10,
-          "adversarial": false
+          "adversarial": false,
+          "minimum_epochs": 12,
+          "minimum_relative_improvement": 0.001
         }
       ]
     },
@@ -434,7 +444,9 @@
           "learning_rate": 0.00016,
           "minimum_learning_rate": 7e-07,
           "patience": 14,
-          "minimum_improvement": 1e-05
+          "minimum_improvement": 1e-05,
+          "minimum_epochs": 30,
+          "minimum_relative_improvement": 0.0005
         },
         {
           "name": "latent384",
@@ -445,7 +457,9 @@
           "learning_rate": 5e-05,
           "minimum_learning_rate": 3.5e-07,
           "patience": 10,
-          "minimum_improvement": 8e-06
+          "minimum_improvement": 8e-06,
+          "minimum_epochs": 15,
+          "minimum_relative_improvement": 0.0005
         },
         {
           "name": "latent512",
@@ -456,7 +470,9 @@
           "learning_rate": 1.5e-05,
           "minimum_learning_rate": 2e-07,
           "patience": 7,
-          "minimum_improvement": 6e-06
+          "minimum_improvement": 6e-06,
+          "minimum_epochs": 8,
+          "minimum_relative_improvement": 0.0005
         }
       ],
       "loss_profile": "fast_balanced_v1",
@@ -501,7 +517,9 @@
         "multiscale": 0.12,
         "projection": 0.1
       },
-      "loss_profile": "fast_balanced_v1"
+      "loss_profile": "fast_balanced_v1",
+      "minimum_epochs": 12,
+      "minimum_relative_improvement": 0.001
     },
     "component_atlas": {
       "enabled": true,
@@ -534,7 +552,9 @@
       "batch_size": 96,
       "learning_rate": 0.00012,
       "patience": 10,
-      "build_strength": 0.5
+      "build_strength": 0.5,
+      "minimum_epochs": 12,
+      "minimum_relative_improvement": 0.001
     },
     "inference": {
       "size": 512,

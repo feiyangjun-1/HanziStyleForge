@@ -53,6 +53,128 @@ Mac에서도 설치, 자체 검사, 글꼴 확인, 이미 만들어 둔 글리�
 
 ---
 
+## VRAM별 권장 설정
+
+기본 제공되는 `config_months_12gb.json`은 **12 GB** 기준으로 맞춰져 있습니다. 12 GB 카드라면 아무것도 바꿀 필요가 없습니다.
+
+아래는 RTX 5070 Ti Laptop(11.9 GB)에서 실측한 1 스텝 최대 VRAM이며, 권장값은 여기서 계산한 것입니다.
+
+| 단계 | 해상도 | 샘플 1개 추가당 | 고정분 |
+|---|---|---|---|
+| VQ 오토인코더 | 256 / 384 / 512 | 0.37 / 0.83 / 1.47 GB | 약 0.13 GB |
+| 확산(VQ·스타일 인코더·EMA 포함) | 256 / 384 / 512 | 0.34 / 0.76 / 1.35 GB | 약 0.44 GB |
+| 리파이너 | 384 | 0.62 GB | 약 0.40 GB |
+
+### 권장값
+
+바꿔야 하는 항목만 적었습니다. 적히지 않은 것은 기본값 그대로 두십시오.
+
+| VRAM | 변경 내용 |
+|---|---|
+| **8 GB** | `fusion.diffusion.phases[2]`(latent512): `batch_size` 4 → **2**, `gradient_accumulation` 1 → **2** |
+| **12 GB** | **변경 불필요.** 이것이 기본값입니다 |
+| **16 GB 이상** | 누적을 실제 배치로 접습니다:<br>`fusion.vq.phases[1]`(vq384): 배치 3 → **6**, 누적 2 → **1**<br>`fusion.vq.phases[2]`(vq512): 배치 1 → **4**, 누적 4 → **1**<br>`fusion.direct_baseline.phases[1]`: 배치 3 → **6**, 누적 2 → **1**<br>`fusion.refiner`: 배치 2 → **4**, 누적 2 → **1**<br>`fusion.purification`: 배치 2 → **4**, 누적 2 → **1** |
+
+### 반드시 지켜야 할 한 가지
+
+**`batch_size × gradient_accumulation` 곱을 바꾸지 마십시오.**
+
+이 곱이 **유효 배치 크기**이며 학습 결과를 결정합니다. VRAM이 적으면 `batch_size`를 절반으로, `gradient_accumulation`을 두 배로 하십시오. 기울기는 동일하고 몇 번에 나누어 모으는지만 달라집니다. 곱이 달라지면 속도가 아니라 학습 자체가 달라지고 학습률도 다시 조정해야 합니다.
+
+### VRAM이 커도 크게 빨라지지 않습니다
+
+이 파이프라인은 메모리가 아니라 **연산에 묶여 있습니다.** 누적을 접었을 때 실측값은 확산 1.06배, VQ 1.12배에 그쳤습니다. 24 GB 카드와 16 GB 카드는 같은 설정에서 사실상 같은 속도로 돌아갑니다. 유효 배치 크기를 올리거나(결과가 달라집니다) 해상도를 올리는 것 말고는 남는 메모리를 쓸 곳이 없기 때문입니다.
+
+**더 큰 카드로 바꾼다고 몇 주가 며칠이 되지는 않습니다.** 소요 시간은 GPU 연산 성능과 글자 수가 결정합니다.
+
+---
+
+## 설정 파일 수정 방법
+
+### 파일 위치
+
+프로젝트 최상위의 **`config_months_12gb.json`**입니다. 네 개의 실행 스크립트(`run_months_resilient.bat`, `run.sh` 등)가 모두 이 파일을 전달하므로 이것만 고치면 됩니다.
+
+아무 텍스트 편집기나 쓸 수 있습니다. **저장은 UTF-8로 하십시오.**
+
+### 해당 항목 찾기
+
+설정은 중첩되어 있습니다. `fusion.vq.phases[2].batch_size`는 위에서부터 따라 내려갑니다.
+
+```json
+{
+  "fusion": {                    ← "fusion" 찾기
+    "vq": {                      ← 그 안의 "vq"
+      "phases": [                ← 그 안의 "phases"(목록)
+        { "name": "vq256", ... },     ← [0] 첫 번째
+        { "name": "vq384", ... },     ← [1] 두 번째
+        { "name": "vq512",            ← [2] 세 번째(0부터 셈)
+          "size": 512,
+          "batch_size": 1,       ← 여기
+          "gradient_accumulation": 4
+        }
+      ]
+    }
+  }
+}
+```
+
+각 단계에는 `name`이 있으므로 이름으로 찾는 것이 가장 안전합니다.
+
+### 실례: 8 GB 카드
+
+`fusion` → `diffusion` → `phases`에서 `"name": "latent512"` 블록을 찾습니다.
+
+```json
+{
+  "name": "latent512",
+  "size": 512,
+  "batch_size": 2,             ← 원래 4
+  "gradient_accumulation": 2,  ← 원래 1
+  ...나머지는 그대로
+}
+```
+
+곱은 `4 × 1`에서 `2 × 2`가 되어 4로 그대로입니다.
+
+### 수정 전에: 기존 진행이 버려지는 조건
+
+체크포인트를 이어 쓸 수 있는지는 "지문"으로 판단합니다. 일치하지 않으면 해당 단계는 **에포크 1부터 다시 시작**하고 학습한 내용은 버려집니다.
+
+| 바꾼 항목 | 결과 |
+|---|---|
+| `fusion.vq.phases[]` 안의 **무엇이든** | 해당 VQ 단계 처음부터 재학습 |
+| `fusion.diffusion.phases[]` 안의 **무엇이든** | 해당 확산 단계 처음부터 재학습 |
+| `fusion.style_encoder`의 `size`, `epochs`, `batch_size`, `learning_rate`, `virtual_length`, `references_per_set`, `cell_grid`, `query_gain` | 스타일 단계 처음부터 재학습 |
+| `fusion.refiner`의 `size`, `epochs`, `batch_size`, `gradient_accumulation`, `learning_rate` | 리파이너 처음부터 재학습 |
+| `fusion.style_encoder.early_stopping` 아래 전부 | **안전.** 다음 에포크부터 적용 |
+| `fusion.refiner.minimum_epochs`, `minimum_relative_improvement` | **안전** |
+| `training.workers`, `training.amp`, 각 `checkpoint_every_steps`, `preview_every` | **안전** |
+
+**빠지기 쉬운 함정:** VQ와 확산에서는 `early_stopping`이 단계 *안쪽*에 있어서, 이것만 바꿔도 해당 단계가 재학습됩니다. 스타일 단계와 리파이너는 그렇지 않습니다.
+
+그러므로 **VRAM 관련 설정은 시작 전에 정하십시오.** 도중에 메모리 부족을 발견하고 고치면 그 단계를 다시 돌려야 합니다.
+
+### 메모리가 부족하면
+
+`CUDA out of memory`에는 어느 단계에서 발생했는지가 나옵니다(터미널에 `vq512`, `latent384` 같은 단계 이름이 출력됩니다). 순서는 다음과 같습니다.
+
+1. 그 단계의 `batch_size`를 절반으로
+2. 같은 블록의 `gradient_accumulation`을 두 배로
+3. 그래도 실패하면 반복
+
+실패한 단계만 바꾸십시오. 한꺼번에 바꾸지 마십시오.
+
+### 망가뜨리지 않았는지 확인
+
+```bash
+./verify.sh
+```
+
+Windows에서는 `verify_project.bat`을 더블클릭합니다. JSON 문법과 값 범위를 검사합니다. JSON에서 가장 흔한 실수는 **쉼표 과부족**입니다. 블록 안 마지막 항목에는 쉼표를 붙이면 안 됩니다.
+
+---
+
 ## 시작하기
 
 ### Windows
@@ -114,6 +236,8 @@ work_hanzistyleforge_fusion_months/qa/index.html      ← QA 보고서. 브라�
 문제없습니다. 각 단계와 생성된 각 글자가 체크포인트로 저장되므로, 같은 명령을 다시 실행하면 멈춘 지점부터 이어집니다.
 
 정전, 크래시, Ctrl+C 모두 마찬가지입니다. `run_months_resilient.bat`과 `run.sh`는 오류 후 자동으로 재시도하며, 20회 연속 실패했을 때만 중단합니다. 거기까지 갔다면 일시적인 문제가 아니라 실제 결함이기 때문입니다.
+
+> **실행 스크립트를 쓰지 않고 직접 명령을 입력해 이어서 하는 경우:** 중지를 요청하면 프로젝트 최상위에 `STOP_AFTER_CHECKPOINT` 표시 파일이 남습니다. 실행 스크립트는 시작할 때마다 이 파일을 지우지만 직접 입력한 명령은 지우지 않으므로, 새 실행이 첫 체크포인트에서 다시 멈춥니다. 이어서 하기 전에 이 파일을 먼저 지우십시오(Windows는 `del STOP_AFTER_CHECKPOINT`, Linux/macOS는 `rm -f STOP_AFTER_CHECKPOINT`).
 
 ---
 

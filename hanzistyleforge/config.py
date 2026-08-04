@@ -270,6 +270,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "size": 128,
             "base_channels": 36,
             "heads": 8,
+            # Both of these are needed to keep the expert set from collapsing
+            # to a single repeated vector.  cell_grid gives the queries values
+            # that actually differ; query_gain is the inverse temperature that
+            # lets the softmax select among them.  Either one alone fails.
+            "cell_grid": 4,
+            "query_gain": 16.0,
             "references_per_set": 10,
             "inference_references": 16,
             "style_bank_groups": 12,
@@ -287,8 +293,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
                 "patience": 24,
                 "minimum_relative_improvement": 0.002,
                 "quality_window": 20,
-                "positive_similarity_minimum": 0.999,
-                "negative_similarity_maximum": 0.15,
+                "positive_similarity_minimum": 0.995,
+                # Separation is what the contrastive objective asks for and is
+                # reachable; an absolute ceiling on the negative is not, because
+                # positive and negative styles are drawn from the same
+                # distribution.  The ceiling is kept only to catch an encoder
+                # that has mapped everything together.
+                "negative_similarity_maximum": 0.60,
+                "separation_minimum": 0.35,
             },
         },
         "vq": {
@@ -633,6 +645,17 @@ def validate_config(cfg: dict[str, Any]) -> None:
         style_cfg = fusion.get("style_encoder", {})
         if int(style_cfg.get("batch_size", 1)) < 1:
             raise ValueError("fusion.style_encoder.batch_size must be at least 1.")
+        if int(style_cfg.get("cell_grid", 4)) < 2:
+            raise ValueError(
+                "fusion.style_encoder.cell_grid must be at least 2; a 1x1 grid "
+                "leaves the expert queries nothing to separate on."
+            )
+        if float(style_cfg.get("query_gain", 16.0)) < 8.0:
+            raise ValueError(
+                "fusion.style_encoder.query_gain must be at least 8; below that "
+                "the expert attention softmax is flat and every expert reads "
+                "out the same average, collapsing the expert set to one vector."
+            )
         early_cfg = style_cfg.get("early_stopping", {})
         if bool(early_cfg.get("enabled", True)):
             if int(early_cfg.get("minimum_epochs", 1)) < 1:

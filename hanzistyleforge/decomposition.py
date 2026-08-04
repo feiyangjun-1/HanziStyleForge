@@ -288,6 +288,37 @@ def load_decompositions(
     return _load_legacy(source)
 
 
+def _collect_leaf_tokens(node: IDSNode, into: list[str]) -> None:
+    if node.is_leaf:
+        if node.token:
+            into.append(node.token)
+        return
+    for child in node.children:
+        _collect_leaf_tokens(child, into)
+
+
+def glyph_part_sets(
+    decompositions: dict[int, Decomposition],
+) -> dict[int, frozenset[str]]:
+    """Map each decomposed codepoint to the atomic parts it is written with.
+
+    ``Decomposition.components`` only holds the top level of the tree, so 摸
+    would report 扌 and 莫 and stop there.  Reference selection wants the whole
+    part inventory, which means the leaves of the IDS tree.  Characters that do
+    not decompose contribute themselves, so every glyph carries at least one
+    part and none of them are silently unselectable.
+    """
+
+    parts: dict[int, frozenset[str]] = {}
+    for codepoint, decomposition in decompositions.items():
+        tokens: list[str] = []
+        _collect_leaf_tokens(decomposition.tree, tokens)
+        if not tokens:
+            tokens = [chr(int(codepoint))]
+        parts[int(codepoint)] = frozenset(tokens)
+    return parts
+
+
 def _bbox(mask: np.ndarray) -> tuple[int, int, int, int]:
     ys, xs = np.where(np.asarray(mask) > 0.2)
     h, w = mask.shape

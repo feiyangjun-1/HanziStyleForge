@@ -53,6 +53,128 @@
 
 ---
 
+## 不同显存怎么设置
+
+默认配置 `config_months_12gb.json` 是按 **12 GB 显存**调好的，12 GB 的卡直接用，不用改任何东西。
+
+下面是在 RTX 5070 Ti Laptop（11.9 GB）上实测的单步峰值显存，推荐值都是从这里算出来的：
+
+| 阶段 | 分辨率 | 每多一个样本 | 固定开销 |
+|---|---|---|---|
+| VQ 自编码器 | 256 / 384 / 512 | 0.37 / 0.83 / 1.47 GB | 约 0.13 GB |
+| 扩散（含 VQ、风格编码器、EMA） | 256 / 384 / 512 | 0.34 / 0.76 / 1.35 GB | 约 0.44 GB |
+| 精修 | 384 | 0.62 GB | 约 0.40 GB |
+
+### 推荐值
+
+只列需要改的地方，没列出来的保持默认。
+
+| 显存 | 要改什么 |
+|---|---|
+| **8 GB** | `fusion.diffusion.phases[2]`（latent512）：`batch_size` 4 → **2**，`gradient_accumulation` 1 → **2** |
+| **12 GB** | **不用改**，默认就是 |
+| **16 GB 及以上** | 把累积折掉，换成更大的实际批：<br>`fusion.vq.phases[1]`（vq384）：批 3 → **6**，累积 2 → **1**<br>`fusion.vq.phases[2]`（vq512）：批 1 → **4**，累积 4 → **1**<br>`fusion.direct_baseline.phases[1]`：批 3 → **6**，累积 2 → **1**<br>`fusion.refiner`：批 2 → **4**，累积 2 → **1**<br>`fusion.purification`：批 2 → **4**，累积 2 → **1** |
+
+### 一条必须遵守的规则
+
+**`batch_size × gradient_accumulation` 这个乘积不能变。**
+
+这个乘积叫**有效批大小**，它决定训练结果。显存小就把 `batch_size` 减半、`gradient_accumulation` 翻倍，算出来的梯度是一样的，只是分几次攒。乘积变了，训练行为就变了，不只是快慢的差别——学习率也得跟着重调。
+
+### 显存更大不会快很多
+
+这条流水线是**算力受限**的，不是显存受限。实测把梯度累积折掉后，扩散阶段只快了 1.06 倍，VQ 阶段 1.12 倍。24 GB 的卡和 16 GB 的卡跑同一份配置速度基本一样——多出来的显存没有地方可花，除非你提高有效批大小（会改变训练结果）或者提高分辨率。
+
+**别指望换大显存的卡能把几周缩短成几天。** 真正决定时间的是 GPU 算力和字数。
+
+---
+
+## 怎么改配置文件
+
+### 文件在哪
+
+项目根目录的 **`config_months_12gb.json`**。四个启动脚本（`run_months_resilient.bat` / `run.sh` 等）传的都是这一个文件，改它就够了。
+
+用记事本、VS Code 或任何文本编辑器都能打开。**保存时必须存成 UTF-8。**
+
+### 怎么找到要改的地方
+
+配置是一层套一层的。上面写的 `fusion.vq.phases[2].batch_size` 就是这样往下找：
+
+```json
+{
+  "fusion": {                    ← 找到 "fusion"
+    "vq": {                      ← 里面找 "vq"
+      "phases": [                ← 里面找 "phases"，这是个列表
+        { "name": "vq256", ... },     ← [0] 第一个
+        { "name": "vq384", ... },     ← [1] 第二个
+        { "name": "vq512",            ← [2] 第三个（从 0 数起）
+          "size": 512,
+          "batch_size": 1,       ← 改这里
+          "gradient_accumulation": 4
+        }
+      ]
+    }
+  }
+}
+```
+
+每个阶段都有 `name`，照着名字找最保险。
+
+### 完整例子：8 GB 显卡
+
+找到 `fusion` → `diffusion` → `phases`，里面 `"name": "latent512"` 那一段：
+
+```json
+{
+  "name": "latent512",
+  "size": 512,
+  "batch_size": 2,             ← 原来是 4
+  "gradient_accumulation": 2,  ← 原来是 1
+  ...其余不动
+}
+```
+
+乘积从 `4 × 1` 变成 `2 × 2`，还是 4，没变。
+
+### 改之前一定要知道：哪些改动会让已有进度作废
+
+程序用「指纹」判断存档能不能接着用。指纹对不上就**从这个阶段的第 1 轮重新开始**，之前跑的全部作废。
+
+| 你改的 | 后果 |
+|---|---|
+| `fusion.vq.phases[]` 里的**任何一项** | 该 VQ 阶段从头重训 |
+| `fusion.diffusion.phases[]` 里的**任何一项** | 该扩散阶段从头重训 |
+| `fusion.style_encoder` 的 `size`、`epochs`、`batch_size`、`learning_rate`、`virtual_length`、`references_per_set`、`cell_grid`、`query_gain` | 风格阶段从头重训 |
+| `fusion.refiner` 的 `size`、`epochs`、`batch_size`、`gradient_accumulation`、`learning_rate` | 精修阶段从头重训 |
+| `fusion.style_encoder.early_stopping` 里的任何一项 | **安全**，下一轮就生效 |
+| `fusion.refiner.minimum_epochs`、`minimum_relative_improvement` | **安全** |
+| `training.workers`、`training.amp`、各阶段的 `checkpoint_every_steps`、`preview_every` | **安全** |
+
+**有一个容易踩的坑**：VQ 和扩散的 `early_stopping` 是写在 phase 里面的，所以改它**也会**导致该阶段重训——这一点和风格阶段、精修阶段不一样。
+
+所以：**显存相关的参数请在开跑之前定好。** 跑到一半发现爆显存再改，那个阶段就得重来。
+
+### 爆显存了怎么办
+
+看到 `CUDA out of memory` 时，先看报错发生在哪个阶段（终端会打印阶段名，例如 `vq512`、`latent384`），然后：
+
+1. 找到那个阶段，`batch_size` 减半
+2. 同一段里 `gradient_accumulation` 翻倍
+3. 还爆就再重复一次
+
+只改出问题的那个阶段，别一次全改。
+
+### 改完怎么确认没写坏
+
+```bash
+verify_project.bat
+```
+
+Linux / macOS 用 `./verify.sh`。它会检查 JSON 语法和取值范围。JSON 最常见的错误是**多了或少了逗号**——最后一项后面不能有逗号。
+
+---
+
 ## 开始使用
 
 ### Windows
@@ -114,6 +236,8 @@ work_hanzistyleforge_fusion_months/qa/index.html      ← 质检报告，用浏�
 不会怎样。每个阶段和每个生成的字都有存档，再跑一次同样的命令就从断点继续。
 
 断电、蓝屏、Ctrl+C 都一样。Windows 的 `run_months_resilient.bat` 和 Linux/macOS 的 `run.sh` 还会在出错后自动重试，连续失败 20 次才会停下来——那说明是真的有问题，不是一时的波动。
+
+> **如果你不用启动脚本、而是自己敲命令恢复**：主动请求停止会在项目根目录留下一个 `STOP_AFTER_CHECKPOINT` 标记文件。启动脚本每次启动都会自动删掉它，手动敲命令则不会，那样新的运行会在第一个检查点就停下。手动恢复前先删掉这个文件（Windows `del STOP_AFTER_CHECKPOINT`，Linux/macOS `rm -f STOP_AFTER_CHECKPOINT`）。
 
 ---
 

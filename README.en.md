@@ -237,6 +237,8 @@ Nothing bad. Every stage and every generated glyph is checkpointed. Run the same
 
 That covers power cuts, crashes and Ctrl+C alike. `run_months_resilient.bat` and `run.sh` also retry automatically after an error, giving up only after 20 consecutive failures, which means the fault is real rather than a passing hiccup.
 
+> **If you resume by typing a command yourself instead of using the launcher:** requesting a stop leaves a `STOP_AFTER_CHECKPOINT` marker file in the project root. The launchers delete it every time they start; a hand-typed command does not, so the new run would stop again at its first checkpoint. Delete the file first — `del STOP_AFTER_CHECKPOINT` on Windows, `rm -f STOP_AFTER_CHECKPOINT` on Linux and macOS.
+
 ---
 
 ## Questions people ask

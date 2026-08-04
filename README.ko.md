@@ -237,6 +237,8 @@ work_hanzistyleforge_fusion_months/qa/index.html      ← QA 보고서. 브라�
 
 정전, 크래시, Ctrl+C 모두 마찬가지입니다. `run_months_resilient.bat`과 `run.sh`는 오류 후 자동으로 재시도하며, 20회 연속 실패했을 때만 중단합니다. 거기까지 갔다면 일시적인 문제가 아니라 실제 결함이기 때문입니다.
 
+> **실행 스크립트를 쓰지 않고 직접 명령을 입력해 이어서 하는 경우:** 중지를 요청하면 프로젝트 최상위에 `STOP_AFTER_CHECKPOINT` 표시 파일이 남습니다. 실행 스크립트는 시작할 때마다 이 파일을 지우지만 직접 입력한 명령은 지우지 않으므로, 새 실행이 첫 체크포인트에서 다시 멈춥니다. 이어서 하기 전에 이 파일을 먼저 지우십시오(Windows는 `del STOP_AFTER_CHECKPOINT`, Linux/macOS는 `rm -f STOP_AFTER_CHECKPOINT`).
+
 ---
 
 ## 자주 묻는 질문

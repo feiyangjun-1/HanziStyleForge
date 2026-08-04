@@ -237,6 +237,8 @@ work_hanzistyleforge_fusion_months/qa/index.html      ← 质检报告，用浏�
 
 断电、蓝屏、Ctrl+C 都一样。Windows 的 `run_months_resilient.bat` 和 Linux/macOS 的 `run.sh` 还会在出错后自动重试，连续失败 20 次才会停下来——那说明是真的有问题，不是一时的波动。
 
+> **如果你不用启动脚本、而是自己敲命令恢复**：主动请求停止会在项目根目录留下一个 `STOP_AFTER_CHECKPOINT` 标记文件。启动脚本每次启动都会自动删掉它，手动敲命令则不会，那样新的运行会在第一个检查点就停下。手动恢复前先删掉这个文件（Windows `del STOP_AFTER_CHECKPOINT`，Linux/macOS `rm -f STOP_AFTER_CHECKPOINT`）。
+
 ---
 
 ## 常见问题

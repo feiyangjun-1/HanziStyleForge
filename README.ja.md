@@ -237,6 +237,8 @@ work_hanzistyleforge_fusion_months/qa/index.html      ← QA レポート。ブ�
 
 停電、クラッシュ、Ctrl+C のいずれでも同じです。`run_months_resilient.bat` と `run.sh` はエラー後に自動で再試行し、20 回連続で失敗した場合にのみ停止します。そこまで続けば一時的な不調ではなく本当の不具合だからです。
 
+> **起動スクリプトを使わず自分でコマンドを打って再開する場合：** 停止を要求すると、プロジェクト直下に `STOP_AFTER_CHECKPOINT` というマーカーファイルが残ります。起動スクリプトは毎回これを削除しますが、手打ちのコマンドは削除しないため、新しい実行が最初のチェックポイントで再び停止します。再開する前にこのファイルを削除してください（Windows は `del STOP_AFTER_CHECKPOINT`、Linux / macOS は `rm -f STOP_AFTER_CHECKPOINT`）。
+
 ---
 
 ## よくある質問

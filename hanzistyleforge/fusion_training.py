@@ -1478,8 +1478,21 @@ def _evaluate_diffusion(
     criterion = _efficient_glyph_criterion(cfg.get("fusion", {}).get("diffusion", {}), cfg.get("loss", {}).get("weights", {})).to(device)
     totals: dict[str, float] = {}
     seen = 0
+    # Validation must sample the same timesteps every epoch or the metric is
+    # not comparable across epochs.  _sample_timesteps picks its low-noise vs
+    # full-range branch with Python's random, which torch.manual_seed does not
+    # reach, so seeding torch alone left the branch mix varying: measured over
+    # the first six epochs, val_dice correlated -0.876 with the mean sampled
+    # timestep, swinging 0.659 to 0.865 while the model improved monotonically.
+    # Early stopping compares that against a 0.05% improvement threshold.
+    # torch.manual_seed also seeds every CUDA device, so the CUDA generators
+    # are saved and restored too; restoring the CPU state alone used to leave
+    # training's CUDA stream perturbed by each validation pass.
     rng_state = torch.random.get_rng_state()
+    cuda_rng_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    python_rng_state = random.getstate()
     torch.manual_seed(987654321)
+    random.seed(987654321)
     try:
         for batch_index, batch in enumerate(loader):
             if batch_index >= maximum_batches:
@@ -1496,6 +1509,9 @@ def _evaluate_diffusion(
                 totals[key] = totals.get(key, 0.0) + float(value.item()) * count
     finally:
         torch.random.set_rng_state(rng_state)
+        if cuda_rng_state is not None:
+            torch.cuda.set_rng_state_all(cuda_rng_state)
+        random.setstate(python_rng_state)
     return {key: value / max(1, seen) for key, value in totals.items()}
 
 

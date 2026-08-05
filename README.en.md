@@ -150,6 +150,7 @@ The program decides whether a checkpoint is still usable by comparing a fingerpr
 | Anything under `fusion.style_encoder.early_stopping` | **Safe**, takes effect next epoch |
 | `fusion.refiner.minimum_epochs`, `minimum_relative_improvement` | **Safe** |
 | `training.workers`, `training.amp`, any `checkpoint_every_steps`, `preview_every` | **Safe** |
+| anything under `build` | **Safe.** `build` is read only when the TTF is assembled at the very end and takes part in no training fingerprint |
 
 **One easy trap:** for VQ and diffusion, `early_stopping` lives *inside* the phase, so editing it **also** retrains that phase. Style and the refiner do not behave that way.
 
@@ -164,6 +165,33 @@ So: **settle the VRAM settings before you start.** Discovering an out-of-memory 
 3. Repeat if it still fails
 
 Change only the phase that failed, not all of them.
+
+### If the generated font file is too large
+
+Almost all of a font's size is glyph outlines — in a hand-designed font the `glyf` table is usually over 90% of the file. The control is `build.curve_simplify`, the outline simplification tolerance: larger keeps fewer points.
+
+Measured over 17 glyphs from simple to very dense, where Dice is how closely the simplified outline matches the source raster:
+
+| `curve_simplify` | points/glyph | Dice |
+|---|---|---|
+| 0.55 | 611 | 0.9848 |
+| **1.2 (default)** | **167** | 0.9843 |
+| 1.8 | 130 | 0.9812 |
+| 2.5 | 117 | 0.9786 |
+
+For scale: a hand-designed font runs about **156 points per glyph**. The 1.2 default sits right there, which puts a finished 20,000+ glyph font at roughly 14 MB.
+
+Past 1.8 the match degrades noticeably, so going higher is not recommended. Going much lower does not help either — the extra points at 0.55 trace raster aliasing rather than the glyph, and Dice does not improve.
+
+The other knobs barely matter: dropping `maximum_points_per_contour` from 480 to 96 only reaches 69%, so leave it alone.
+
+To see where your own file's bytes actually went:
+
+```bash
+python tools/font_size_report.py build/target-HanziStyleForge-Fusion.ttf
+```
+
+It lists bytes per table and the point-count distribution per glyph.
 
 ### Checking you did not break the file
 

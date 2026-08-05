@@ -150,6 +150,7 @@
 | `fusion.style_encoder.early_stopping` 里的任何一项 | **安全**，下一轮就生效 |
 | `fusion.refiner.minimum_epochs`、`minimum_relative_improvement` | **安全** |
 | `training.workers`、`training.amp`、各阶段的 `checkpoint_every_steps`、`preview_every` | **安全** |
+| `build` 里的**任何一项** | **安全**，`build` 只在最后生成 TTF 时读取，不参与任何训练指纹 |
 
 **有一个容易踩的坑**：VQ 和扩散的 `early_stopping` 是写在 phase 里面的，所以改它**也会**导致该阶段重训——这一点和风格阶段、精修阶段不一样。
 
@@ -164,6 +165,33 @@
 3. 还爆就再重复一次
 
 只改出问题的那个阶段，别一次全改。
+
+### 生成的字体文件太大怎么办
+
+字体体积几乎全在字形轮廓上——手工字体里 `glyf` 表通常占 90% 以上。控制它的是 `build.curve_simplify`，也就是轮廓简化的容差，值越大保留的点越少。
+
+在参考字体上实测 17 个不同复杂度的字，Dice 是简化后的轮廓和原始栅格的吻合度：
+
+| `curve_simplify` | 点数/字 | Dice |
+|---|---|---|
+| 0.55 | 611 | 0.9848 |
+| **1.2（默认）** | **167** | 0.9843 |
+| 1.8 | 130 | 0.9812 |
+| 2.5 | 117 | 0.9786 |
+
+做个参照：手工设计的字体大约是 **156 点/字**。默认的 1.2 就在这个水平，对应两万多字的成品约 14 MB。
+
+超过 1.8 之后吻合度开始明显下降，不建议再往上调。反过来调到 0.55 那种很小的值也没有好处——多出来的点是在描栅格锯齿而不是字形，Dice 反而不会更好。
+
+其他几个旋钮效果都很弱，实测把 `maximum_points_per_contour` 从 480 压到 96 也只减到 69%，不用动。
+
+想知道自己的成品到底大在哪：
+
+```bash
+python tools/font_size_report.py build/target-HanziStyleForge-Fusion.ttf
+```
+
+它会按表列出字节占比和每个字的点数分布。
 
 ### 改完怎么确认没写坏
 

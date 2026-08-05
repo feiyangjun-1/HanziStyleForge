@@ -540,7 +540,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "sdf_upsample": 4,
         "sdf_sigma": 0.46,
         "sdf_levels": [0.0, -0.06, 0.06, -0.12, 0.12, -0.20, 0.20, -0.28, 0.28],
-        "curve_simplify": 0.48,
+        # Douglas-Peucker tolerance for the traced outline, in source pixels.
+        # Measured over 17 glyphs spanning simple to very dense: 0.55 keeps 611
+        # points per glyph against a hand-designed font's 156, and the extra
+        # points trace raster aliasing rather than the glyph, so Dice does not
+        # improve.  1.2 lands at 167 points for a 0.0005 Dice cost.
+        "curve_simplify": 1.2,
         "corner_angle_degrees": 100.0,
         "maximum_points_per_contour": 480,
         "family_suffix": " HanziStyleForge Fusion",

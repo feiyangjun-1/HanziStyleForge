@@ -609,7 +609,7 @@
       -0.16,
       0.16
     ],
-    "curve_simplify": 0.55,
+    "curve_simplify": 1.2,
     "corner_angle_degrees": 100.0,
     "maximum_points_per_contour": 480,
     "family_suffix": " HanziStyleForge Fusion",

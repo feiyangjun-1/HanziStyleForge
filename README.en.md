@@ -298,6 +298,8 @@ Apple GPUs are not supported. See the hardware section above.
 - **A generated font may be subject to both the `target.ttf` and `ref.otf` licenses.** Use only fonts you have the right to train on, modify and distribute
 - This is experimental software. Check the QA report and test the font yourself before releasing anything
 
+This software is licensed under the Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE). That license covers **the software only**. It grants you no right to train on, modify or distribute any font.
+
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for references and licensing.
 
 ---

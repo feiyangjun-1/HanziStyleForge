@@ -298,6 +298,8 @@ Apple GPU 不受支持。见上面的硬件要求。
 - **生成的字体可能同时受 `target.ttf` 和 `ref.otf` 的许可证约束**。请只使用你有权训练、修改和发布的字体
 - 这是实验性工具。正式发布前请检查质检报告并人工测试
 
+本软件采用 Apache License 2.0，见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。这个许可证**只覆盖软件本身**，不授予你对任何字体的训练、修改或发布权利。
+
 第三方引用和许可信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ---

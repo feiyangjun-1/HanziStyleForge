@@ -1,0 +1,13 @@
+HanziStyleForge Fusion
+Copyright 2026 feiyangjun_
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+This license covers this software only. It grants no right to train on,
+modify, distribute or sublicense any font. The fonts you place in fonts/ and
+refs/ are not part of this project, and trained weights and generated fonts
+can be derivative works of them and stay subject to their licenses.
+
+Nothing third-party is bundled here. Third-party components installed into a
+local virtual environment, downloaded at runtime, or studied as architectural
+references are recorded in THIRD_PARTY_NOTICES.md, each under its own terms.

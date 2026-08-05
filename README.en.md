@@ -87,6 +87,68 @@ This pipeline is **compute bound**, not memory bound. Folding the accumulation a
 
 **Do not expect a bigger card to turn weeks into days.** Wall-clock time is set by GPU compute and character count.
 
+### What actually fits, per phase
+
+Peak memory from real training steps on an 11.9 GB card, with the line drawn at an 85% budget (10.15 GB). For reference if your card is larger:
+
+| Diffusion phase | Default batch | Peak there | Largest batch that fits | Peak there |
+|---|---|---|---|---|
+| latent256 | 6 | 2.5 GB | **24+** | 8.6 GB |
+| latent384 | 4 | 3.5 GB | **12** | 9.6 GB |
+| latent512 | 4 | 5.9 GB | **6** | 8.6 GB |
+
+Crossing that line is not a gentle slowdown. latent384 at batch 16 peaks at 12.7 GB, above the physical memory, so Windows pages it to system RAM and a step goes from 0.54 s to 5.9 s — **11 times slower, which is unusable**.
+
+**This table tells you what fits; it is not advice to raise anything.** The same setting measured twice differed by 17% in throughput (48.0 and 56.2 samples/s), and the whole batch-size sweep fell inside that noise with no upward trend.
+
+---
+
+## CPU settings
+
+These live in the `training` block of the configuration file.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `workers` | 8 | Data-loading subprocesses. **The only one worth tuning per machine** |
+| `cpu_threads` | 6 | PyTorch threads in the main process |
+| `opencv_threads` | 1 | OpenCV threads |
+| `interop_threads` | 1 | PyTorch inter-op threads |
+| `prefetch_factor` | 4 | Batches each worker prefetches |
+| `image_cache_mb_per_process` | 192 | Per-process image cache |
+
+### Tune only `workers`
+
+| Logical cores | Suggested `workers` |
+|---|---|
+| 4–8 | 2–4 |
+| 8–16 | 4–6 |
+| 16–32 | 8 |
+| Over 32 | 8–12; beyond that the return is small |
+
+**RAM is the real constraint, not core count.** On Windows each worker is a separate process that imports PyTorch in full, roughly 400 MB; Linux forks and uses less. Twelve workers cost about 5 GB on Windows. With less than 16 GB of RAM, stay at 4 or below.
+
+Changing `workers` never restarts a stage — it is not part of any checkpoint compatibility check.
+
+### Leave the other three alone
+
+`cpu_threads`, `opencv_threads` and `interop_threads` are **hard-capped in code at 6, 2 and 2**. Larger values have no effect.
+
+The caps are deliberate. Glyph conversion performs thousands of small OpenCV operations between GPU batches, and letting OpenCV, OpenBLAS and PyTorch each build a full thread pool makes that dramatically slower on high-core machines — slow enough to look like a stall. Each data-loading worker is also forced to a single thread for the same reason.
+
+### Deciding whether more workers would help
+
+Once it is running, watch two numbers together:
+
+```bash
+nvidia-smi --query-gpu=utilization.gpu --format=csv
+```
+
+- **GPU below 80% while the CPU is not busy** → more `workers` may help
+- **GPU steady above 85%** → loading is not the bottleneck; more workers change nothing
+- **CPU near 100%** → already CPU bound, and more workers make it worse
+
+For reference: on a 16-core / 32-thread machine at `workers` 4, the GPU averaged 85% while the CPU sat at 8%. Loading was never saturated, so going to 8 was worth only 5–10%.
+
 ---
 
 ## How to edit the configuration

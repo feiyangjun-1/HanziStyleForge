@@ -438,7 +438,7 @@
         {
           "name": "latent256",
           "size": 256,
-          "epochs": 120,
+          "epochs": 200,
           "batch_size": 6,
           "gradient_accumulation": 1,
           "learning_rate": 0.00016,
@@ -451,7 +451,7 @@
         {
           "name": "latent384",
           "size": 384,
-          "epochs": 60,
+          "epochs": 100,
           "batch_size": 4,
           "gradient_accumulation": 1,
           "learning_rate": 5e-05,
@@ -464,7 +464,7 @@
         {
           "name": "latent512",
           "size": 512,
-          "epochs": 30,
+          "epochs": 60,
           "batch_size": 4,
           "gradient_accumulation": 1,
           "learning_rate": 1.5e-05,
@@ -473,6 +473,19 @@
           "minimum_improvement": 6e-06,
           "minimum_epochs": 8,
           "minimum_relative_improvement": 0.0005
+        },
+        {
+          "name": "latent512b",
+          "size": 512,
+          "epochs": 60,
+          "batch_size": 4,
+          "gradient_accumulation": 1,
+          "learning_rate": 8e-06,
+          "minimum_learning_rate": 1.5e-07,
+          "patience": 8,
+          "minimum_improvement": 4e-06,
+          "minimum_epochs": 10,
+          "minimum_relative_improvement": 0.0004
         }
       ],
       "loss_profile": "fast_balanced_v1",

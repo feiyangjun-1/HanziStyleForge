@@ -55,7 +55,7 @@ On a Mac you can still install, run the self-test, inspect fonts, or build a fon
 
 ## Settings for your amount of VRAM
 
-The shipped `config_months_12gb.json` is tuned for **12 GB**. On a 12 GB card, change nothing.
+The shipped `config.json` is tuned for **12 GB**. On a 12 GB card, change nothing.
 
 These are measured peak per-step figures on an RTX 5070 Ti Laptop (11.9 GB); the recommendations below are derived from them:
 
@@ -155,7 +155,7 @@ For reference: on a 16-core / 32-thread machine at `workers` 4, the GPU averaged
 
 ### Where the file is
 
-**`config_months_12gb.json`** in the project root. All four launchers (`run_months_resilient.bat`, `run.sh`, and the rest) pass this one file, so it is the only one to edit.
+**`config.json`** in the project root. All four launchers (`run.bat`, `run.sh`, and the rest) pass this one file, so it is the only one to edit.
 
 Any text editor works. **Save it as UTF-8.**
 
@@ -261,7 +261,7 @@ It lists bytes per table and the point-count distribution per glyph.
 ./verify.sh
 ```
 
-On Windows, double-click `verify_project.bat`. It checks the JSON syntax and the value ranges. The most common JSON mistake is **a missing or extra comma** — the last entry in a block must not have one.
+On Windows, double-click `verify.bat`. It checks the JSON syntax and the value ranges. The most common JSON mistake is **a missing or extra comma** — the last entry in a block must not have one.
 
 ---
 
@@ -273,12 +273,12 @@ Double-click these four, in order:
 
 | Step | Double-click | What it does |
 |---|---|---|
-| 1 | `install_cuda130.bat` | Sets up the environment. Once only |
+| 1 | `install.bat` | Sets up the environment. Once only |
 | 2 | — | Put your two fonts in `fonts\` and `refs\` |
-| 3 | `verify_project.bat` | Checks everything is in place |
-| 4 | `run_months_resilient.bat` | Starts the run |
+| 3 | `verify.bat` | Checks everything is in place |
+| 4 | `run.bat` | Starts the run |
 
-To pause, double-click `request_safe_stop.bat`. The run exits safely at its next checkpoint. Double-click `run_months_resilient.bat` again to continue.
+To pause, double-click `stop.bat`. The run exits safely at its next checkpoint. Double-click `run.bat` again to continue.
 
 ### Linux and macOS
 
@@ -325,7 +325,7 @@ Training data, checkpoints and generation progress live in `work_hanzistyleforge
 
 Nothing bad. Every stage and every generated glyph is checkpointed. Run the same command again and it continues from where it stopped.
 
-That covers power cuts, crashes and Ctrl+C alike. `run_months_resilient.bat` and `run.sh` also retry automatically after an error, giving up only after 20 consecutive failures, which means the fault is real rather than a passing hiccup.
+That covers power cuts, crashes and Ctrl+C alike. `run.bat` and `run.sh` also retry automatically after an error, giving up only after 20 consecutive failures, which means the fault is real rather than a passing hiccup.
 
 > **If you resume by typing a command yourself instead of using the launcher:** requesting a stop leaves a `STOP_AFTER_CHECKPOINT` marker file in the project root. The launchers delete it every time they start; a hand-typed command does not, so the new run would stop again at its first checkpoint. Delete the file first — `del STOP_AFTER_CHECKPOINT` on Windows, `rm -f STOP_AFTER_CHECKPOINT` on Linux and macOS.
 

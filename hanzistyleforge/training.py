@@ -55,7 +55,7 @@ def _resolve_device(cfg: dict[str, Any]) -> torch.device:
     requested = str(cfg["training"].get("device", "cuda"))
     if requested.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError(
-            "The configuration requires CUDA, but the current PyTorch installation cannot use it. Run install_cuda130.bat "
+            "The configuration requires CUDA, but the current PyTorch installation cannot use it. Run install.bat "
             "and confirm that torch.cuda.is_available() is True."
         )
     if not requested.startswith("cuda"):

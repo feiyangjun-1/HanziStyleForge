@@ -55,7 +55,7 @@
 
 ## 不同显存怎么设置
 
-默认配置 `config_months_12gb.json` 是按 **12 GB 显存**调好的，12 GB 的卡直接用，不用改任何东西。
+默认配置 `config.json` 是按 **12 GB 显存**调好的，12 GB 的卡直接用，不用改任何东西。
 
 下面是在 RTX 5070 Ti Laptop（11.9 GB）上实测的单步峰值显存，推荐值都是从这里算出来的：
 
@@ -155,7 +155,7 @@ nvidia-smi --query-gpu=utilization.gpu --format=csv
 
 ### 文件在哪
 
-项目根目录的 **`config_months_12gb.json`**。四个启动脚本（`run_months_resilient.bat` / `run.sh` 等）传的都是这一个文件，改它就够了。
+项目根目录的 **`config.json`**。四个启动脚本（`run.bat` / `run.sh` 等）传的都是这一个文件，改它就够了。
 
 用记事本、VS Code 或任何文本编辑器都能打开。**保存时必须存成 UTF-8。**
 
@@ -258,7 +258,7 @@ python tools/font_size_report.py build/target-HanziStyleForge-Fusion.ttf
 ### 改完怎么确认没写坏
 
 ```bash
-verify_project.bat
+verify.bat
 ```
 
 Linux / macOS 用 `./verify.sh`。它会检查 JSON 语法和取值范围。JSON 最常见的错误是**多了或少了逗号**——最后一项后面不能有逗号。
@@ -273,12 +273,12 @@ Linux / macOS 用 `./verify.sh`。它会检查 JSON 语法和取值范围。JSON
 
 | 步骤 | 双击 | 做什么 |
 |---|---|---|
-| 1 | `install_cuda130.bat` | 装环境。只需一次 |
+| 1 | `install.bat` | 装环境。只需一次 |
 | 2 | — | 把两个字体放进 `fonts\` 和 `refs\` |
-| 3 | `verify_project.bat` | 检查一切正常 |
-| 4 | `run_months_resilient.bat` | 开跑 |
+| 3 | `verify.bat` | 检查一切正常 |
+| 4 | `run.bat` | 开跑 |
 
-想中途暂停就双击 `request_safe_stop.bat`，程序会在下一个存档点安全退出。再次双击 `run_months_resilient.bat` 就接着跑。
+想中途暂停就双击 `stop.bat`，程序会在下一个存档点安全退出。再次双击 `run.bat` 就接着跑。
 
 ### Linux 和 macOS
 
@@ -325,7 +325,7 @@ work_hanzistyleforge_fusion_months/qa/index.html      ← 质检报告，用浏�
 
 不会怎样。每个阶段和每个生成的字都有存档，再跑一次同样的命令就从断点继续。
 
-断电、蓝屏、Ctrl+C 都一样。Windows 的 `run_months_resilient.bat` 和 Linux/macOS 的 `run.sh` 还会在出错后自动重试，连续失败 20 次才会停下来——那说明是真的有问题，不是一时的波动。
+断电、蓝屏、Ctrl+C 都一样。Windows 的 `run.bat` 和 Linux/macOS 的 `run.sh` 还会在出错后自动重试，连续失败 20 次才会停下来——那说明是真的有问题，不是一时的波动。
 
 > **如果你不用启动脚本、而是自己敲命令恢复**：主动请求停止会在项目根目录留下一个 `STOP_AFTER_CHECKPOINT` 标记文件。启动脚本每次启动都会自动删掉它，手动敲命令则不会，那样新的运行会在第一个检查点就停下。手动恢复前先删掉这个文件（Windows `del STOP_AFTER_CHECKPOINT`，Linux/macOS `rm -f STOP_AFTER_CHECKPOINT`）。
 

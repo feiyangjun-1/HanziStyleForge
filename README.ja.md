@@ -55,7 +55,7 @@ Mac でもインストール、セルフテスト、フォントの確認、既�
 
 ## VRAM 別の推奨設定
 
-同梱の `config_months_12gb.json` は **12 GB** に合わせてあります。12 GB のカードなら何も変更する必要はありません。
+同梱の `config.json` は **12 GB** に合わせてあります。12 GB のカードなら何も変更する必要はありません。
 
 以下は RTX 5070 Ti Laptop（11.9 GB）で実測した 1 ステップのピーク VRAM です。推奨値はここから算出しています。
 
@@ -155,7 +155,7 @@ nvidia-smi --query-gpu=utilization.gpu --format=csv
 
 ### ファイルの場所
 
-プロジェクト直下の **`config_months_12gb.json`** です。4 つの起動スクリプト（`run_months_resilient.bat`、`run.sh` など）はすべてこのファイルを渡すので、編集するのはこれだけです。
+プロジェクト直下の **`config.json`** です。4 つの起動スクリプト（`run.bat`、`run.sh` など）はすべてこのファイルを渡すので、編集するのはこれだけです。
 
 テキストエディタなら何でも構いません。**保存は UTF-8 で行ってください。**
 
@@ -261,7 +261,7 @@ python tools/font_size_report.py build/target-HanziStyleForge-Fusion.ttf
 ./verify.sh
 ```
 
-Windows では `verify_project.bat` をダブルクリックします。JSON の構文と値の範囲を検査します。JSON で最も多い誤りは**カンマの過不足**です。ブロック内の最後の項目にカンマを付けてはいけません。
+Windows では `verify.bat` をダブルクリックします。JSON の構文と値の範囲を検査します。JSON で最も多い誤りは**カンマの過不足**です。ブロック内の最後の項目にカンマを付けてはいけません。
 
 ---
 
@@ -273,12 +273,12 @@ Windows では `verify_project.bat` をダブルクリックします。JSON の
 
 | 手順 | ダブルクリック | 内容 |
 |---|---|---|
-| 1 | `install_cuda130.bat` | 環境構築。初回のみ |
+| 1 | `install.bat` | 環境構築。初回のみ |
 | 2 | — | 2 つのフォントを `fonts\` と `refs\` に置く |
-| 3 | `verify_project.bat` | 準備が整っているか確認 |
-| 4 | `run_months_resilient.bat` | 実行開始 |
+| 3 | `verify.bat` | 準備が整っているか確認 |
+| 4 | `run.bat` | 実行開始 |
 
-中断したいときは `request_safe_stop.bat` をダブルクリックすると、次のチェックポイントで安全に終了します。`run_months_resilient.bat` をもう一度ダブルクリックすれば続きから再開します。
+中断したいときは `stop.bat` をダブルクリックすると、次のチェックポイントで安全に終了します。`run.bat` をもう一度ダブルクリックすれば続きから再開します。
 
 ### Linux と macOS
 
@@ -325,7 +325,7 @@ work_hanzistyleforge_fusion_months/qa/index.html      ← QA レポート。ブ�
 
 問題ありません。各段階と生成済みの各字がチェックポイントとして保存されており、同じコマンドをもう一度実行すれば止まった所から続きます。
 
-停電、クラッシュ、Ctrl+C のいずれでも同じです。`run_months_resilient.bat` と `run.sh` はエラー後に自動で再試行し、20 回連続で失敗した場合にのみ停止します。そこまで続けば一時的な不調ではなく本当の不具合だからです。
+停電、クラッシュ、Ctrl+C のいずれでも同じです。`run.bat` と `run.sh` はエラー後に自動で再試行し、20 回連続で失敗した場合にのみ停止します。そこまで続けば一時的な不調ではなく本当の不具合だからです。
 
 > **起動スクリプトを使わず自分でコマンドを打って再開する場合：** 停止を要求すると、プロジェクト直下に `STOP_AFTER_CHECKPOINT` というマーカーファイルが残ります。起動スクリプトは毎回これを削除しますが、手打ちのコマンドは削除しないため、新しい実行が最初のチェックポイントで再び停止します。再開する前にこのファイルを削除してください（Windows は `del STOP_AFTER_CHECKPOINT`、Linux / macOS は `rm -f STOP_AFTER_CHECKPOINT`）。
 

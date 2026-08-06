@@ -5,7 +5,7 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-CONFIG="${HSF_CONFIG:-config_months_12gb.json}"
+CONFIG="${HSF_CONFIG:-config.json}"
 MAX_ATTEMPTS=20
 
 [ -x .venv/bin/python ] || { echo "Run ./install.sh first."; exit 1; }

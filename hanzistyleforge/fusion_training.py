@@ -1675,8 +1675,22 @@ def _train_diffusion_phase(
     ensure_dir(phase_dir)
     completed_path = phase_dir / "completed.json"
     if completed_path.is_file() and (phase_dir / "best.pt").is_file():
+        # The marker has to be checked against the current fingerprint, not
+        # merely to exist.  Raising a phase's epoch cap changes the fingerprint
+        # and restarts the phase, but the marker from the previous cap stays on
+        # disk; once the restarted phase writes its first best.pt the payload
+        # matches again, and an existence test would then declare the phase
+        # finished wherever it happened to be interrupted.  That silently cut
+        # latent256 off at 51 epochs of a 200 epoch cap, still improving.
+        try:
+            completed = load_json(completed_path)
+        except Exception:
+            completed = {}
+        if not _compatible(completed, fingerprint):
+            completed_path.unlink(missing_ok=True)
+            completed = None
         payload = torch.load(phase_dir / "best.pt", map_location=device, weights_only=False)
-        if _compatible(payload, fingerprint):
+        if completed is not None and _compatible(payload, fingerprint):
             if payload.get("ema"):
                 ema_temp = ExponentialMovingAverage(model, decay=float(diffusion_cfg.get("ema_decay", 0.9999)))
                 ema_temp.load_state_dict(payload["ema"])

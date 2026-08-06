@@ -133,7 +133,7 @@
       "sha256": "f56f89e8e43878262c6b6d5e47f66b36ed3d0d4fbea287d96e432bbda383ad2c"
     },
     {
-      "path": "config_months_12gb.json",
+      "path": "config.json",
       "bytes": 15339,
       "sha256": "f56f89e8e43878262c6b6d5e47f66b36ed3d0d4fbea287d96e432bbda383ad2c"
     },
@@ -348,7 +348,7 @@
       "sha256": "301feb66cfd95a030963f2b50052f92790436b1389976e66b3e6becf19564cb9"
     },
     {
-      "path": "install_cuda130.bat",
+      "path": "install.bat",
       "bytes": 2902,
       "sha256": "53e60bc9a2d8e6d02d9e2c22097d57d8514a8ff2b5b30574a8012bb4db88b28e"
     },
@@ -368,7 +368,7 @@
       "sha256": "58fd5ff05b4b5aa59590a230f891ed15ba46bef645c87a4441a0752cb617bab1"
     },
     {
-      "path": "request_safe_stop.bat",
+      "path": "stop.bat",
       "bytes": 176,
       "sha256": "80461bbccf5f25985c599fb29bd71e6d2726fc8dc93caf49f799ce2f466a8b38"
     },
@@ -378,7 +378,7 @@
       "sha256": "bfd26a5d497e649a851d9f447c04845b34e8047dc6af93d7ffcedceb4fe48cf6"
     },
     {
-      "path": "run_months_resilient.bat",
+      "path": "run.bat",
       "bytes": 1742,
       "sha256": "bab46ae7bda8a67cfa9e99cdb673078e5a3e86574d6e24983276a6b19ee06f87"
     },
@@ -398,7 +398,7 @@
       "sha256": "60d75e1be84f53a2f63299c211e9f195948e5781820adb750bd3e8cf749f6eba"
     },
     {
-      "path": "verify_project.bat",
+      "path": "verify.bat",
       "bytes": 725,
       "sha256": "c736404315fcd4449b1c229087a23469bfbec3e7ca04e0c84bd2f794fe13df44"
     },

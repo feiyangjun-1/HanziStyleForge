@@ -12,7 +12,7 @@ echo ============================================================
 echo HanziStyleForge Fusion months run - attempt !ATTEMPT!
 echo All major stages and every generated glyph are checkpointed.
 echo ============================================================
-.venv\Scripts\python.exe hanzistyleforge.py --config config_months_12gb.json fusion-auto-months
+.venv\Scripts\python.exe hanzistyleforge.py --config config.json fusion-auto-months
 set RC=!errorlevel!
 if !RC! EQU 0 goto :done
 if !RC! EQU 75 goto :safe_stopped
@@ -46,7 +46,7 @@ echo Stopped by user. Run this file again to resume from the latest checkpoint.
 pause
 exit /b 130
 :not_installed
-echo Run install_cuda130.bat first.
+echo Run install.bat first.
 pause
 exit /b 1
 :failed

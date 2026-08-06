@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-CONFIG="${HSF_CONFIG:-config_months_12gb.json}"
+CONFIG="${HSF_CONFIG:-config.json}"
 [ -x .venv/bin/python ] || { echo "Run ./install.sh first."; exit 1; }
 
 echo "Running the self-test..."

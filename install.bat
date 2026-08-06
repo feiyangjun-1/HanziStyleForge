@@ -51,7 +51,7 @@ echo [6/7] Running internal self-test...
 if errorlevel 1 goto :failed
 
 echo [7/7] Installation completed successfully.
-echo Next: copy fonts\target.ttf and refs\ref.otf, then run verify_project.bat.
+echo Next: copy fonts\target.ttf and refs\ref.otf, then run verify.bat.
 pause
 exit /b 0
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Set up HanziStyleForge Fusion on Linux or macOS.
-# Windows users run install_cuda130.bat instead.
+# Windows users run install.bat instead.
 set -euo pipefail
 cd "$(dirname "$0")"
 

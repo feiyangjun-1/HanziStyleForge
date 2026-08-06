@@ -4,17 +4,17 @@ cd /d "%~dp0"
 if not exist ".venv\Scripts\python.exe" goto :not_installed
 .venv\Scripts\python.exe selftest.py
 if errorlevel 1 goto :failed
-.venv\Scripts\python.exe hanzistyleforge.py --config config_months_12gb.json check
+.venv\Scripts\python.exe hanzistyleforge.py --config config.json check
 if errorlevel 1 goto :failed
 if exist "work_hanzistyleforge_fusion_months\dataset\index.csv" (
-  .venv\Scripts\python.exe hanzistyleforge.py --config config_months_12gb.json contract
+  .venv\Scripts\python.exe hanzistyleforge.py --config config.json contract
   if errorlevel 1 goto :failed
 )
 echo HanziStyleForge Fusion project verification completed successfully.
 pause
 exit /b 0
 :not_installed
-echo Run install_cuda130.bat first.
+echo Run install.bat first.
 pause
 exit /b 1
 :failed

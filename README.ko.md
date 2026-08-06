@@ -55,7 +55,7 @@ Mac에서도 설치, 자체 검사, 글꼴 확인, 이미 만들어 둔 글리�
 
 ## VRAM별 권장 설정
 
-기본 제공되는 `config_months_12gb.json`은 **12 GB** 기준으로 맞춰져 있습니다. 12 GB 카드라면 아무것도 바꿀 필요가 없습니다.
+기본 제공되는 `config.json`은 **12 GB** 기준으로 맞춰져 있습니다. 12 GB 카드라면 아무것도 바꿀 필요가 없습니다.
 
 아래는 RTX 5070 Ti Laptop(11.9 GB)에서 실측한 1 스텝 최대 VRAM이며, 권장값은 여기서 계산한 것입니다.
 
@@ -155,7 +155,7 @@ nvidia-smi --query-gpu=utilization.gpu --format=csv
 
 ### 파일 위치
 
-프로젝트 최상위의 **`config_months_12gb.json`**입니다. 네 개의 실행 스크립트(`run_months_resilient.bat`, `run.sh` 등)가 모두 이 파일을 전달하므로 이것만 고치면 됩니다.
+프로젝트 최상위의 **`config.json`**입니다. 네 개의 실행 스크립트(`run.bat`, `run.sh` 등)가 모두 이 파일을 전달하므로 이것만 고치면 됩니다.
 
 아무 텍스트 편집기나 쓸 수 있습니다. **저장은 UTF-8로 하십시오.**
 
@@ -261,7 +261,7 @@ python tools/font_size_report.py build/target-HanziStyleForge-Fusion.ttf
 ./verify.sh
 ```
 
-Windows에서는 `verify_project.bat`을 더블클릭합니다. JSON 문법과 값 범위를 검사합니다. JSON에서 가장 흔한 실수는 **쉼표 과부족**입니다. 블록 안 마지막 항목에는 쉼표를 붙이면 안 됩니다.
+Windows에서는 `verify.bat`을 더블클릭합니다. JSON 문법과 값 범위를 검사합니다. JSON에서 가장 흔한 실수는 **쉼표 과부족**입니다. 블록 안 마지막 항목에는 쉼표를 붙이면 안 됩니다.
 
 ---
 
@@ -273,12 +273,12 @@ Windows에서는 `verify_project.bat`을 더블클릭합니다. JSON 문법과 �
 
 | 단계 | 더블클릭 | 하는 일 |
 |---|---|---|
-| 1 | `install_cuda130.bat` | 환경 설치. 처음 한 번만 |
+| 1 | `install.bat` | 환경 설치. 처음 한 번만 |
 | 2 | — | 글꼴 두 개를 `fonts\`와 `refs\`에 넣기 |
-| 3 | `verify_project.bat` | 준비 상태 확인 |
-| 4 | `run_months_resilient.bat` | 실행 시작 |
+| 3 | `verify.bat` | 준비 상태 확인 |
+| 4 | `run.bat` | 실행 시작 |
 
-중간에 멈추려면 `request_safe_stop.bat`을 더블클릭하십시오. 다음 체크포인트에서 안전하게 종료합니다. `run_months_resilient.bat`을 다시 더블클릭하면 이어서 진행합니다.
+중간에 멈추려면 `stop.bat`을 더블클릭하십시오. 다음 체크포인트에서 안전하게 종료합니다. `run.bat`을 다시 더블클릭하면 이어서 진행합니다.
 
 ### Linux와 macOS
 
@@ -325,7 +325,7 @@ work_hanzistyleforge_fusion_months/qa/index.html      ← QA 보고서. 브라�
 
 문제없습니다. 각 단계와 생성된 각 글자가 체크포인트로 저장되므로, 같은 명령을 다시 실행하면 멈춘 지점부터 이어집니다.
 
-정전, 크래시, Ctrl+C 모두 마찬가지입니다. `run_months_resilient.bat`과 `run.sh`는 오류 후 자동으로 재시도하며, 20회 연속 실패했을 때만 중단합니다. 거기까지 갔다면 일시적인 문제가 아니라 실제 결함이기 때문입니다.
+정전, 크래시, Ctrl+C 모두 마찬가지입니다. `run.bat`과 `run.sh`는 오류 후 자동으로 재시도하며, 20회 연속 실패했을 때만 중단합니다. 거기까지 갔다면 일시적인 문제가 아니라 실제 결함이기 때문입니다.
 
 > **실행 스크립트를 쓰지 않고 직접 명령을 입력해 이어서 하는 경우:** 중지를 요청하면 프로젝트 최상위에 `STOP_AFTER_CHECKPOINT` 표시 파일이 남습니다. 실행 스크립트는 시작할 때마다 이 파일을 지우지만 직접 입력한 명령은 지우지 않으므로, 새 실행이 첫 체크포인트에서 다시 멈춥니다. 이어서 하기 전에 이 파일을 먼저 지우십시오(Windows는 `del STOP_AFTER_CHECKPOINT`, Linux/macOS는 `rm -f STOP_AFTER_CHECKPOINT`).
 

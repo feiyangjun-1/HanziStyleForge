@@ -275,7 +275,7 @@ def make_parser() -> argparse.ArgumentParser:
             "regenerates every Han glyph covered by ref, and verifies preservation of target non-Han content."
         )
     )
-    parser.add_argument("--config", default="config_months_12gb.json")
+    parser.add_argument("--config", default="config.json")
     parser.add_argument(
         "--backend",
         choices=["native", "dir"],

@@ -163,7 +163,7 @@ def check_environment(cfg: dict[str, Any]) -> dict[str, Any]:
     if requested_device.startswith("cuda") and not bool(torch_info.get("cuda_available", False)):
         raise RuntimeError(
             "The current long-run configuration requires CUDA, but PyTorch did not detect an available NVIDIA GPU. "
-            "Run install_cuda130.bat and verify that the NVIDIA driver is working."
+            "Run install.bat and verify that the NVIDIA driver is working."
         )
     if str(cfg.get("build", {}).get("replace_strategy", "new_glyph_and_remap")).lower() in {
         "new_glyph_and_remap", "adaptive_safe"

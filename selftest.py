@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from PIL import Image
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTFont
@@ -205,6 +206,51 @@ def run_style_expert_selftest() -> None:
     flat = diversity(cell_grid=4, query_gain=1.0)
     assert flat > 0.90 * ceiling, (
         f"an unscaled query should still collapse the experts, got {flat:.4f}"
+    )
+
+
+def run_proxy_cache_scale_selftest() -> None:
+    """A cached proxy must equal a freshly computed one, exactly.
+
+    _render_and_proxy computes on a cold cache and reads on a warm one, and the
+    two used to disagree by 255x because make_content_proxy returns uint8 while
+    read_proxy returns float32 0..1. The value reaches dataset/index.csv through
+    complexity, and that file's hash is the dataset_sha256 in every training
+    checkpoint, so a single prepare re-run against a warm cache silently
+    invalidated every trained stage. Nothing about that is visible in a short
+    run: the first prepare is always cold, so the disagreement only appears the
+    second time.
+    """
+
+    import tempfile
+
+    from hanzistyleforge.analysis import _render_and_proxy
+    from hanzistyleforge.config import DEFAULT_CONFIG
+
+    class _StubRenderer:
+        def save_png(self, codepoint: int, path) -> None:
+            size = 64
+            image = np.zeros((size, size), dtype=np.uint8)
+            image[12:52, 20:26] = 255
+            image[28:34, 12:52] = 255
+            Image.fromarray(255 - image, mode="L").save(path)
+
+    cfg = {"render": dict(DEFAULT_CONFIG["render"])}
+    cfg["render"]["size"] = 64
+    cfg["render"]["proxy_skeleton_size"] = 64
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        render_path = root / "U4E00.png"
+        proxy_path = root / "proxy.png"
+        renderer = _StubRenderer()
+        _, cold = _render_and_proxy(renderer, 0x4E00, render_path, proxy_path, cfg)
+        _, warm = _render_and_proxy(renderer, 0x4E00, render_path, proxy_path, cfg)
+
+    assert cold.dtype == warm.dtype, f"proxy dtype depends on the cache: {cold.dtype} vs {warm.dtype}"
+    assert float(cold.max()) <= 1.0 + 1e-6, f"cold proxy is not 0..1 scaled: max {float(cold.max())}"
+    assert np.array_equal(cold, warm), (
+        "a freshly computed proxy differs from the cached one; complexity in "
+        "dataset/index.csv would then depend on cache state"
     )
 
 
@@ -1098,6 +1144,7 @@ def main() -> None:
     run_fusion_selftest()
     run_codebook_selftest()
     run_style_expert_selftest()
+    run_proxy_cache_scale_selftest()
     run_reference_coverage_selftest()
     run_early_stopping_selftest()
     run_training_stage_name_selftest()

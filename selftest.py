@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import tempfile
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from PIL import Image
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTFont
@@ -205,6 +207,89 @@ def run_style_expert_selftest() -> None:
     flat = diversity(cell_grid=4, query_gain=1.0)
     assert flat > 0.90 * ceiling, (
         f"an unscaled query should still collapse the experts, got {flat:.4f}"
+    )
+
+
+def run_completion_marker_selftest() -> None:
+    """A completion marker must vouch for the settings actually in force.
+
+    Testing that completed.json exists lets it outlive the configuration that
+    wrote it. Raising a phase's epoch cap changes the fingerprint and restarts
+    the phase, but the old marker survives, and once the restarted phase saves
+    its first best.pt that payload matches the new fingerprint again, so an
+    existence test reports the phase finished wherever it was interrupted.
+    latent256 was cut off at 51 epochs of a 200 cap and vq256 at 18 of 100,
+    both still improving, both silent. Three copies of the same test existed;
+    this guards the single one that replaced them.
+    """
+
+    import tempfile
+
+    from hanzistyleforge.fusion_training import _completion_claimed
+
+    fingerprint = {"version": 301, "phase": {"name": "vq256", "epochs": 100}}
+    stale = {"version": 301, "phase": {"name": "vq256", "epochs": 40}}
+    with tempfile.TemporaryDirectory() as directory:
+        phase_dir = Path(directory)
+        marker = phase_dir / "completed.json"
+
+        assert not _completion_claimed(phase_dir, fingerprint), "an absent marker claimed completion"
+
+        marker.write_text(json.dumps({"fingerprint": fingerprint}), encoding="utf-8")
+        assert _completion_claimed(phase_dir, fingerprint), "a matching marker was rejected"
+
+        marker.write_text(json.dumps({"fingerprint": stale}), encoding="utf-8")
+        assert not _completion_claimed(phase_dir, fingerprint), (
+            "a marker written under a different epoch cap still claimed completion"
+        )
+        assert not marker.is_file(), "a stale marker survived and can mislead the next attempt"
+
+        marker.write_text("{ not json", encoding="utf-8")
+        assert not _completion_claimed(phase_dir, fingerprint), "an unreadable marker claimed completion"
+
+
+def run_proxy_cache_scale_selftest() -> None:
+    """A cached proxy must equal a freshly computed one, exactly.
+
+    _render_and_proxy computes on a cold cache and reads on a warm one, and the
+    two used to disagree by 255x because make_content_proxy returns uint8 while
+    read_proxy returns float32 0..1. The value reaches dataset/index.csv through
+    complexity, and that file's hash is the dataset_sha256 in every training
+    checkpoint, so a single prepare re-run against a warm cache silently
+    invalidated every trained stage. Nothing about that is visible in a short
+    run: the first prepare is always cold, so the disagreement only appears the
+    second time.
+    """
+
+    import tempfile
+
+    from hanzistyleforge.analysis import _render_and_proxy
+    from hanzistyleforge.config import DEFAULT_CONFIG
+
+    class _StubRenderer:
+        def save_png(self, codepoint: int, path) -> None:
+            size = 64
+            image = np.zeros((size, size), dtype=np.uint8)
+            image[12:52, 20:26] = 255
+            image[28:34, 12:52] = 255
+            Image.fromarray(255 - image, mode="L").save(path)
+
+    cfg = {"render": dict(DEFAULT_CONFIG["render"])}
+    cfg["render"]["size"] = 64
+    cfg["render"]["proxy_skeleton_size"] = 64
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        render_path = root / "U4E00.png"
+        proxy_path = root / "proxy.png"
+        renderer = _StubRenderer()
+        _, cold = _render_and_proxy(renderer, 0x4E00, render_path, proxy_path, cfg)
+        _, warm = _render_and_proxy(renderer, 0x4E00, render_path, proxy_path, cfg)
+
+    assert cold.dtype == warm.dtype, f"proxy dtype depends on the cache: {cold.dtype} vs {warm.dtype}"
+    assert float(cold.max()) <= 1.0 + 1e-6, f"cold proxy is not 0..1 scaled: max {float(cold.max())}"
+    assert np.array_equal(cold, warm), (
+        "a freshly computed proxy differs from the cached one; complexity in "
+        "dataset/index.csv would then depend on cache state"
     )
 
 
@@ -1098,6 +1183,8 @@ def main() -> None:
     run_fusion_selftest()
     run_codebook_selftest()
     run_style_expert_selftest()
+    run_completion_marker_selftest()
+    run_proxy_cache_scale_selftest()
     run_reference_coverage_selftest()
     run_early_stopping_selftest()
     run_training_stage_name_selftest()

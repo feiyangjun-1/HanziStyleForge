@@ -288,6 +288,18 @@ def _render_and_proxy(
             distance_clip_ratio=float(render_cfg["distance_clip_ratio"]),
         )
         save_proxy(proxy_path, proxy)
+        # make_content_proxy returns uint8 0..255 while read_proxy returns
+        # float32 0..1, so returning the freshly computed array directly made
+        # every caller's result depend on whether the cache happened to be
+        # warm.  complexity is proxy[..., 1].mean(), and it lands in
+        # dataset/index.csv, whose hash is the dataset_sha256 inside every
+        # training checkpoint: one prepare re-run against a warm cache
+        # rewrote that column 255x smaller and invalidated every trained
+        # stage.  The same mismatch also fed calibrate_same_structure_thresholds
+        # a mixture of scales whenever one font's cache was warm and the
+        # other's was not.  PNG storage is lossless for uint8, so scaling here
+        # is exactly what a later read_proxy would return.
+        proxy = np.asarray(proxy, dtype=np.float32) / 255.0
     else:
         proxy = read_proxy(proxy_path)
     return ink, proxy

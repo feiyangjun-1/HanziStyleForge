@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import tempfile
 from pathlib import Path
@@ -207,6 +208,44 @@ def run_style_expert_selftest() -> None:
     assert flat > 0.90 * ceiling, (
         f"an unscaled query should still collapse the experts, got {flat:.4f}"
     )
+
+
+def run_completion_marker_selftest() -> None:
+    """A completion marker must vouch for the settings actually in force.
+
+    Testing that completed.json exists lets it outlive the configuration that
+    wrote it. Raising a phase's epoch cap changes the fingerprint and restarts
+    the phase, but the old marker survives, and once the restarted phase saves
+    its first best.pt that payload matches the new fingerprint again, so an
+    existence test reports the phase finished wherever it was interrupted.
+    latent256 was cut off at 51 epochs of a 200 cap and vq256 at 18 of 100,
+    both still improving, both silent. Three copies of the same test existed;
+    this guards the single one that replaced them.
+    """
+
+    import tempfile
+
+    from hanzistyleforge.fusion_training import _completion_claimed
+
+    fingerprint = {"version": 301, "phase": {"name": "vq256", "epochs": 100}}
+    stale = {"version": 301, "phase": {"name": "vq256", "epochs": 40}}
+    with tempfile.TemporaryDirectory() as directory:
+        phase_dir = Path(directory)
+        marker = phase_dir / "completed.json"
+
+        assert not _completion_claimed(phase_dir, fingerprint), "an absent marker claimed completion"
+
+        marker.write_text(json.dumps({"fingerprint": fingerprint}), encoding="utf-8")
+        assert _completion_claimed(phase_dir, fingerprint), "a matching marker was rejected"
+
+        marker.write_text(json.dumps({"fingerprint": stale}), encoding="utf-8")
+        assert not _completion_claimed(phase_dir, fingerprint), (
+            "a marker written under a different epoch cap still claimed completion"
+        )
+        assert not marker.is_file(), "a stale marker survived and can mislead the next attempt"
+
+        marker.write_text("{ not json", encoding="utf-8")
+        assert not _completion_claimed(phase_dir, fingerprint), "an unreadable marker claimed completion"
 
 
 def run_proxy_cache_scale_selftest() -> None:
@@ -1144,6 +1183,7 @@ def main() -> None:
     run_fusion_selftest()
     run_codebook_selftest()
     run_style_expert_selftest()
+    run_completion_marker_selftest()
     run_proxy_cache_scale_selftest()
     run_reference_coverage_selftest()
     run_early_stopping_selftest()

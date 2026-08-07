@@ -248,6 +248,33 @@ def _compatible(payload: dict[str, Any], fingerprint: dict[str, Any]) -> bool:
     return payload.get("fingerprint") == fingerprint
 
 
+def _completion_claimed(phase_dir: Path, fingerprint: dict[str, Any]) -> bool:
+    """Does a completion marker actually vouch for the settings in force?
+
+    Testing that `completed.json` merely exists lets it outlive the settings
+    that produced it.  Raising a phase's epoch cap changes the fingerprint and
+    correctly restarts the phase, but the old marker stays on disk; as soon as
+    the restarted phase saves its first `best.pt` that payload matches the new
+    fingerprint again, so an existence test declares the phase finished
+    wherever it happened to be interrupted.  latent256 was cut off at 51 epochs
+    of a 200 cap that way, and vq256 at 18 of 100, both still improving and
+    both silent.  A marker that does not match is deleted so it cannot mislead
+    the next attempt either.
+    """
+
+    path = phase_dir / "completed.json"
+    if not path.is_file():
+        return False
+    try:
+        payload = load_json(path)
+    except Exception:
+        payload = {}
+    if _compatible(payload, fingerprint):
+        return True
+    path.unlink(missing_ok=True)
+    return False
+
+
 def _load_resume(directory: Path, fingerprint: dict[str, Any]) -> tuple[Path | None, dict[str, Any] | None]:
     candidates = [directory / name for name in ("in_epoch.pt", "last.pt", "best.pt")]
     candidates = [path for path in candidates if path.is_file()]
@@ -969,7 +996,7 @@ def train_vqvae(cfg: dict[str, Any]) -> dict[str, Any]:
     for phase in phases:
         phase_dir = ensure_dir(root / str(phase["name"]))
         fingerprint = _checkpoint_fingerprint(index_path, "vq", model_spec, dict(phase))
-        if (phase_dir / "completed.json").is_file() and (phase_dir / "best.pt").is_file():
+        if _completion_claimed(phase_dir, fingerprint) and (phase_dir / "best.pt").is_file():
             payload = torch.load(phase_dir / "best.pt", map_location=device, weights_only=False)
             if _compatible(payload, fingerprint):
                 model.load_state_dict(payload["model"], strict=True)
@@ -1674,23 +1701,9 @@ def _train_diffusion_phase(
     fingerprint = _checkpoint_fingerprint(index_path, "latent_diffusion", model_spec, phase_fingerprint)
     ensure_dir(phase_dir)
     completed_path = phase_dir / "completed.json"
-    if completed_path.is_file() and (phase_dir / "best.pt").is_file():
-        # The marker has to be checked against the current fingerprint, not
-        # merely to exist.  Raising a phase's epoch cap changes the fingerprint
-        # and restarts the phase, but the marker from the previous cap stays on
-        # disk; once the restarted phase writes its first best.pt the payload
-        # matches again, and an existence test would then declare the phase
-        # finished wherever it happened to be interrupted.  That silently cut
-        # latent256 off at 51 epochs of a 200 epoch cap, still improving.
-        try:
-            completed = load_json(completed_path)
-        except Exception:
-            completed = {}
-        if not _compatible(completed, fingerprint):
-            completed_path.unlink(missing_ok=True)
-            completed = None
+    if _completion_claimed(phase_dir, fingerprint) and (phase_dir / "best.pt").is_file():
         payload = torch.load(phase_dir / "best.pt", map_location=device, weights_only=False)
-        if completed is not None and _compatible(payload, fingerprint):
+        if _compatible(payload, fingerprint):
             if payload.get("ema"):
                 ema_temp = ExponentialMovingAverage(model, decay=float(diffusion_cfg.get("ema_decay", 0.9999)))
                 ema_temp.load_state_dict(payload["ema"])
@@ -1978,16 +1991,13 @@ def train_diffusion(cfg: dict[str, Any]) -> dict[str, Any]:
         best_validation = float(active_payload.get("validation", {}).get("loss", active_payload.get("best", math.inf)))
         for cycle in range(1, cycles + 1):
             cycle_dir = root / "purification" / f"cycle_{cycle:03d}"
-            if (cycle_dir / "completed.json").is_file() and (cycle_dir / "best.pt").is_file():
-                payload = torch.load(cycle_dir / "best.pt", map_location=device, weights_only=False)
-                if payload.get("ema"):
-                    ema = ExponentialMovingAverage(model)
-                    ema.load_state_dict(payload["ema"])
-                    ema.copy_to(model)
-                active_checkpoint = cycle_dir / "best.pt"
-                best_validation = min(best_validation, float(payload.get("validation", {}).get("loss", math.inf)))
-                purification_results.append({"cycle": cycle, "checkpoint": str(active_checkpoint.resolve()), "reused": True})
-                continue
+            # A completed cycle is recognised inside _train_diffusion_phase,
+            # which checks the marker against the current fingerprint.  The
+            # skip that used to sit here checked only that completed.json
+            # existed, not even that best.pt matched, so a cycle interrupted
+            # after any configuration change was treated as finished.  Keeping
+            # one implementation is the point: this bug appeared three separate
+            # times because the same test was written three times.
             hard = mine_hard_codepoints(
                 cfg, model, vq, style_encoder, style_bank, schedule,
                 maximum=int(purification_cfg.get("hard_samples", 8000)),

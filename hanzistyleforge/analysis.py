@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -233,6 +234,39 @@ def extract_locl_sensitive_codepoints(font_path: str | Path) -> set[int]:
         font.close()
 
 
+def _discard_stale_font_caches(
+    fingerprint_path: Path,
+    fingerprint: dict[str, Any],
+    owned_by: dict[str, tuple[Path, ...]],
+) -> None:
+    """Delete cached renders whose source font has been replaced.
+
+    The caches are keyed by codepoint alone, and `_render_and_proxy` reuses any
+    file that already exists, so swapping a font would otherwise be a silent
+    no-op: prepare re-runs because the fingerprint changed, rewrites the
+    fingerprint, and reuses every image the previous font produced. Each font's
+    caches are cleared independently, so replacing the reference does not throw
+    away the target renders that are still valid.
+    """
+
+    if not fingerprint_path.is_file():
+        return
+    try:
+        previous = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    for key, directories in owned_by.items():
+        if previous.get(key) == fingerprint.get(key):
+            continue
+        for directory in directories:
+            if not directory.is_dir():
+                continue
+            removed = sum(1 for _ in directory.glob("*"))
+            shutil.rmtree(directory, ignore_errors=True)
+            ensure_dir(directory)
+            print(f"{key} changed: cleared {removed} cached files in {directory.name}")
+
+
 def _render_and_proxy(
     renderer: FontRenderer,
     codepoint: int,
@@ -346,6 +380,15 @@ def prepare_project(cfg: dict[str, Any], force: bool = False) -> dict[str, Any]:
         and json.loads(fingerprint_path.read_text(encoding="utf-8")) == fingerprint
     ):
         return json.loads(summary_path.read_text(encoding="utf-8"))
+
+    _discard_stale_font_caches(
+        fingerprint_path,
+        fingerprint,
+        {
+            "reference_sha256": (ref_render_dir, ref_proxy_dir),
+            "target_sha256": (target_render_dir, target_proxy_dir, target_aux_dir),
+        },
+    )
 
     target_info = inspect_font(target_path)
     if target_info["outline_type"] != "TrueType glyf" or target_info["is_variable"]:

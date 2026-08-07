@@ -561,6 +561,35 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
+FONT_SUFFIXES: tuple[str, ...] = (".otf", ".ttf", ".ttc", ".otc")
+
+
+def resolve_font_path(configured: Path) -> Path:
+    """Find the font by name, whatever suffix it happens to carry.
+
+    Swapping a reference font otherwise means editing the configuration just
+    because the replacement is TrueType rather than CFF, which is a difference
+    the renderer does not care about: it reads the file's contents, not its
+    name.  An exact match always wins, so an explicit path still decides.
+    """
+
+    if configured.is_file():
+        return configured
+    matches = sorted(
+        path for path in configured.parent.glob(f"{configured.stem}.*")
+        if path.suffix.lower() in FONT_SUFFIXES and path.is_file()
+    )
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        names = ", ".join(path.name for path in matches)
+        raise FileNotFoundError(
+            f"{configured.parent} holds several fonts named {configured.stem}: {names}. "
+            "Keep one, or point paths at the exact file."
+        )
+    return configured
+
+
 def load_config(config_path: str | Path) -> dict[str, Any]:
     config_path = Path(config_path).resolve()
     user = load_json(config_path) if config_path.exists() else {}
@@ -568,6 +597,8 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
     base = config_path.parent
     for key in ("target_font", "reference_font", "work_dir", "output_font"):
         cfg["paths"][key] = str(absolute_from(cfg["paths"][key], base))
+    for key in ("target_font", "reference_font"):
+        cfg["paths"][key] = str(resolve_font_path(Path(cfg["paths"][key])))
     extra = cfg["scope"].get("extra_chars_file", "")
     if extra:
         cfg["scope"]["extra_chars_file"] = str(absolute_from(extra, base))

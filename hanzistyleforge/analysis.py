@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 from fontTools.ttLib import TTFont
 from tqdm import tqdm
@@ -234,10 +235,25 @@ def extract_locl_sensitive_codepoints(font_path: str | Path) -> set[int]:
         font.close()
 
 
+def _cache_inputs(fingerprint: dict[str, Any], font_key: str, *, reference: bool) -> dict[str, Any]:
+    """The part of a fingerprint that a font's cached images actually depend on.
+
+    Both caches depend on the font and on the render settings, but
+    reference_erosion is applied to the reference only, so including it for the
+    target would throw away tens of thousands of still-valid files whenever it
+    is tuned.
+    """
+
+    render = dict(fingerprint.get("render", {}) or {})
+    if not reference:
+        render.pop("reference_erosion", None)
+    return {"font": fingerprint.get(font_key), "render": render}
+
+
 def _discard_stale_font_caches(
     fingerprint_path: Path,
     fingerprint: dict[str, Any],
-    owned_by: dict[str, tuple[Path, ...]],
+    owned_by: dict[str, tuple[dict[str, Any], tuple[Path, ...]]],
 ) -> None:
     """Delete cached renders whose source font has been replaced.
 
@@ -255,8 +271,8 @@ def _discard_stale_font_caches(
         previous = json.loads(fingerprint_path.read_text(encoding="utf-8"))
     except Exception:
         return
-    for key, directories in owned_by.items():
-        if previous.get(key) == fingerprint.get(key):
+    for label, (inputs, directories) in owned_by.items():
+        if _cache_inputs(previous, label, reference=label == "reference_sha256") == inputs:
             continue
         for directory in directories:
             if not directory.is_dir():
@@ -264,7 +280,7 @@ def _discard_stale_font_caches(
             removed = sum(1 for _ in directory.glob("*"))
             shutil.rmtree(directory, ignore_errors=True)
             ensure_dir(directory)
-            print(f"{key} changed: cleared {removed} cached files in {directory.name}")
+            print(f"{label} inputs changed: cleared {removed} cached files in {directory.name}")
 
 
 def _render_and_proxy(
@@ -273,14 +289,30 @@ def _render_and_proxy(
     render_path: Path,
     proxy_path: Path,
     cfg: dict[str, Any],
+    erode: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     if not render_path.is_file():
         renderer.save_png(codepoint, render_path)
     ink = read_ink(render_path)
     if not proxy_path.is_file():
         render_cfg = cfg["render"]
+        source = ink
+        if erode > 0:
+            # Thinning before skeletonization, never in the stored render.
+            # make_content_proxy binarizes at proxy_skeleton_size, and adjacent
+            # strokes in dense glyphs merge there: measured on Swei Sans Thin,
+            # 2.8% of sampled characters lost a component or a hole at 240px,
+            # and a one-pixel erosion took that to 0.5%. A merge is
+            # unrecoverable, because the structure the model is asked to draw
+            # is the one in the proxy. The render itself must stay untouched:
+            # it is what make_reference_fallbacks builds a real glyph from
+            # whenever generation is rejected, and a thinned fallback would
+            # ship in the font.
+            radius = max(1, int(erode))
+            kernel = np.ones((radius * 2 + 1, radius * 2 + 1), dtype=np.uint8)
+            source = cv2.erode(np.asarray(ink, dtype=np.float32), kernel)
         proxy = make_content_proxy(
-            ink,
+            source,
             output_size=int(render_cfg["size"]),
             skeleton_size=int(render_cfg["proxy_skeleton_size"]),
             threshold=float(render_cfg["threshold"]),
@@ -393,12 +425,24 @@ def prepare_project(cfg: dict[str, Any], force: bool = False) -> dict[str, Any]:
     ):
         return json.loads(summary_path.read_text(encoding="utf-8"))
 
+    # "render" appears alongside each font hash because the cached images are
+    # its output too: changing proxy_skeleton_size, threshold or
+    # reference_erosion makes every stored proxy stale even though the font is
+    # untouched, and _render_and_proxy reuses whatever file it finds. Keying
+    # only on the font hash would let a render setting be changed, prepare
+    # re-run because the fingerprint moved, and the old images be read back.
     _discard_stale_font_caches(
         fingerprint_path,
         fingerprint,
         {
-            "reference_sha256": (ref_render_dir, ref_proxy_dir),
-            "target_sha256": (target_render_dir, target_proxy_dir, target_aux_dir),
+            "reference_sha256": (
+                _cache_inputs(fingerprint, "reference_sha256", reference=True),
+                (ref_render_dir, ref_proxy_dir),
+            ),
+            "target_sha256": (
+                _cache_inputs(fingerprint, "target_sha256", reference=False),
+                (target_render_dir, target_proxy_dir, target_aux_dir),
+            ),
         },
     )
 
@@ -529,7 +573,10 @@ def prepare_project(cfg: dict[str, Any], force: bool = False) -> dict[str, Any]:
             filename = cp_filename(cp)
             ref_path = ref_render_dir / filename
             ref_proxy_path = ref_proxy_dir / filename
-            ref_ink, ref_proxy = _render_and_proxy(reference_renderer, cp, ref_path, ref_proxy_path, cfg)
+            ref_ink, ref_proxy = _render_and_proxy(
+                reference_renderer, cp, ref_path, ref_proxy_path, cfg,
+                erode=int(render_cfg.get("reference_erosion", 0)),
+            )
             reference_metrics = glyph_quality_metrics(ref_ink, threshold=float(render_cfg["threshold"]))
             complexity = float(ref_proxy[..., 1].mean())
             has_target = cp in target_paths

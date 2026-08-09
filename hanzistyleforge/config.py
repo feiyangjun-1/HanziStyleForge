@@ -43,6 +43,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "threshold": 0.5,
         "canonical_radius_ratio": 0.0105,
         "distance_clip_ratio": 0.075,
+        # Thin the reference before its structure proxy is built, in pixels at
+        # render.size.  Adjacent strokes in dense glyphs merge when the proxy
+        # binarizes at proxy_skeleton_size, and a merged stroke is
+        # unrecoverable because the proxy is the structure the model is asked
+        # to draw.  Measured on Swei Sans Thin, a value of 1 took that loss
+        # from 2.8% of sampled characters to 0.5%.  The reference's own stroke
+        # weight never reaches the output, which is why thinning it is free:
+        # the proxy skeletonizes and re-dilates at a fixed radius, and weight
+        # comes from the target.  The stored reference render is untouched, so
+        # reference fallbacks keep their real shape.
+        "reference_erosion": 0,
     },
     "analysis": {
         "minimum_ink_ratio": 0.0025,

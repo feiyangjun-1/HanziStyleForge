@@ -292,7 +292,7 @@ class FusionDiffusionDataset(Dataset):
         hard_repeat: int = 4,
         seed: int = 20260719,
     ) -> None:
-        rows = [row for row in read_csv(index_csv) if row.get("mode") == "self" and row.get("split") == split]
+        rows = [row for row in read_csv(index_csv) if row.get("mode") in ("self", "cross") and row.get("split") == split]
         if hard_codepoints:
             hard_rows = [row for row in rows if int(row["codepoint"]) in hard_codepoints]
             rows = rows + hard_rows * max(0, int(hard_repeat) - 1)
@@ -413,7 +413,7 @@ class FusionRefinerDataset(Dataset):
     ) -> None:
         self.rows = [
             row for row in read_csv(index_csv)
-            if row.get("mode") == "self" and row.get("split") == split
+            if row.get("mode") in ("self", "cross") and row.get("split") == split
         ]
         if not self.rows:
             raise RuntimeError(f"no refiner samples for split={split}")

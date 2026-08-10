@@ -30,7 +30,6 @@
     "pad": 32,
     "antialias": 4,
     "threshold": 0.5,
-    "canonical_radius_ratio": 0.0105,
     "distance_clip_ratio": 0.075
   },
   "analysis": {

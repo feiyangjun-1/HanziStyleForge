@@ -41,7 +41,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pad": 32,
         "antialias": 4,
         "threshold": 0.5,
-        "canonical_radius_ratio": 0.0105,
         "distance_clip_ratio": 0.075,
         # Thin the reference before its structure proxy is built, in pixels at
         # render.size.  Adjacent strokes in dense glyphs merge when the proxy
@@ -63,6 +62,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "panel_count": 320,
         "maximum_style_glyphs": 0,
         "force_reprepare": False,
+        # Characters where ref and target share the same structural form,
+        # manually reviewed. Each gets an extra mode="cross" dataset row
+        # (ref_proxy -> real target) so training sees at least one real
+        # example of style transfer instead of only self-reconstruction.
+        "same_form_chars_file": "data/same_form_han.txt",
     },
     "retrieval": {
         "enabled": True,
@@ -614,6 +618,9 @@ def load_config(config_path: str | Path) -> dict[str, Any]:
     extra = cfg["scope"].get("extra_chars_file", "")
     if extra:
         cfg["scope"]["extra_chars_file"] = str(absolute_from(extra, base))
+    same_form_file = cfg.get("analysis", {}).get("same_form_chars_file", "")
+    if same_form_file:
+        cfg["analysis"]["same_form_chars_file"] = str(absolute_from(same_form_file, base))
     stop_file = cfg.get("runtime", {}).get("safe_stop_file", "")
     if stop_file:
         cfg["runtime"]["safe_stop_file"] = str(absolute_from(stop_file, base))

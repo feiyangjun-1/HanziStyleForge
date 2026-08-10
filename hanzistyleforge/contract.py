@@ -26,9 +26,14 @@ def validate_data_flow_contract(
 ) -> dict[str, Any]:
     """Enforce the central project contract.
 
-    Training rows must use only caches rendered from ``fonts/target.ttf``.
+    Every training row's ground truth (target_path, target_aux_path) must come
+    from ``fonts/target.ttf`` -- the model is never taught to draw ref's own
+    glyphs. Two input shapes are permitted for what the model reads to draw
+    that ground truth: mode="self" reads target's own proxy (self-reconstruction),
+    and mode="cross" reads ref's proxy (data/same_form_han.txt, a manually
+    reviewed set of characters where ref and target share the same structural
+    form) -- these are the project's only supervised ref-to-target pairs.
     Generation rows must use only content proxies rendered from ``refs/ref.otf``.
-    No cross-font target/ref pair is permitted in the training index.
     """
 
     work = Path(cfg["paths"]["work_dir"])
@@ -47,21 +52,28 @@ def validate_data_flow_contract(
     errors: list[str] = []
     training_rows = read_csv(dataset_csv) if dataset_csv.is_file() else []
     generation_rows = read_csv(audit_csv) if audit_csv.is_file() else []
+    cross_font_training_pairs = 0
 
     for index, row in enumerate(training_rows, start=2):
-        if row.get("mode", "self") != "self":
-            errors.append(f"dataset/index.csv row {index} has a mode other than self.")
+        mode = row.get("mode", "self")
+        if mode not in ("self", "cross"):
+            errors.append(f"dataset/index.csv row {index} has mode {mode!r}, expected self or cross.")
         proxy_path = row.get("proxy_path", "")
         target_path = row.get("target_path", "")
         aux_path = row.get("target_aux_path", "")
-        if not _inside(proxy_path, target_proxy_root):
-            errors.append(f"Training row {index} has a proxy_path outside target_proxy: {proxy_path}")
+        # The ground truth is never allowed to come from ref, in either mode.
         if not _inside(target_path, target_render_root):
             errors.append(f"Training row {index} has a target_path outside target_render: {target_path}")
         if not _inside(aux_path, target_aux_root):
             errors.append(f"Training row {index} has a target_aux_path outside target_aux: {aux_path}")
-        if _inside(proxy_path, ref_proxy_root) or _inside(target_path, ref_render_root):
-            errors.append(f"Training row {index} contains reference data.")
+        if mode == "self":
+            if not _inside(proxy_path, target_proxy_root):
+                errors.append(f"Training row {index} (self) has a proxy_path outside target_proxy: {proxy_path}")
+        elif mode == "cross":
+            if not _inside(proxy_path, ref_proxy_root):
+                errors.append(f"Training row {index} (cross) has a proxy_path outside ref_proxy: {proxy_path}")
+            else:
+                cross_font_training_pairs += 1
 
     for index, row in enumerate(generation_rows, start=2):
         ref_path = row.get("ref_path", "")
@@ -72,10 +84,10 @@ def validate_data_flow_contract(
             errors.append(f"Generation row {index} has a ref_proxy_path outside ref_proxy: {ref_proxy_path}")
 
     report = {
-        "contract": "target-style-only training; ref-structure-only generation",
+        "contract": "target-only ground truth; self- and reviewed cross-mode structure input; ref-structure-only generation",
         "training_rows": len(training_rows),
         "generation_rows": len(generation_rows),
-        "cross_font_training_pairs": 0 if not errors else None,
+        "cross_font_training_pairs": cross_font_training_pairs if not errors else None,
         "training_source": str(target_proxy_root.resolve()),
         "training_truth": str(target_render_root.resolve()),
         "generation_content_source": str(ref_proxy_root.resolve()),
@@ -88,6 +100,7 @@ def validate_data_flow_contract(
     if errors:
         preview = "\n".join(errors[:12])
         raise DataFlowContractError(
-            "Data-flow contract validation failed. Training must use target only, and generation must use ref only.\n" + preview
+            "Data-flow contract validation failed. Training ground truth must always be target; "
+            "structure input must be target (self) or the reviewed same-form set (cross); generation must use ref only.\n" + preview
         )
     return report

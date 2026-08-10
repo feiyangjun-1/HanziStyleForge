@@ -31,6 +31,7 @@ from .util import (
     cp_filename,
     cp_to_char,
     ensure_dir,
+    load_codepoints,
     save_codepoints,
     save_json,
     sha256_file,
@@ -316,7 +317,6 @@ def _render_and_proxy(
             output_size=int(render_cfg["size"]),
             skeleton_size=int(render_cfg["proxy_skeleton_size"]),
             threshold=float(render_cfg["threshold"]),
-            canonical_radius_ratio=float(render_cfg["canonical_radius_ratio"]),
             distance_clip_ratio=float(render_cfg["distance_clip_ratio"]),
         )
         save_proxy(proxy_path, proxy)
@@ -405,7 +405,7 @@ def prepare_project(cfg: dict[str, Any], force: bool = False) -> dict[str, Any]:
     reference_path = Path(cfg["paths"]["reference_font"])
     fingerprint = {
         "checkpoint_format": CHECKPOINT_FORMAT_VERSION,
-        "method": "style-only-self-reconstruction-no-cross-font-pairs",
+        "method": "target-self-reconstruction-plus-reviewed-same-form-cross-pairs",
         "target_sha256": sha256_file(target_path),
         "reference_sha256": sha256_file(reference_path),
         "scope": cfg["scope"],
@@ -550,8 +550,10 @@ def prepare_project(cfg: dict[str, Any], force: bool = False) -> dict[str, Any]:
             seed=int(cfg["training"]["seed"]),
         )
         dataset_rows: list[dict[str, Any]] = []
+        valid_style_by_cp: dict[int, dict[str, Any]] = {}
         for row in valid_style_rows:
             cp = int(row["codepoint"])
+            valid_style_by_cp[cp] = row
             dataset_rows.append({
                 "sample_id": f"style-self-{cp:06X}",
                 "codepoint": cp,
@@ -567,6 +569,9 @@ def prepare_project(cfg: dict[str, Any], force: bool = False) -> dict[str, Any]:
                 "complexity": row["complexity"],
             })
 
+        same_form_file = cfg["analysis"].get("same_form_chars_file", "")
+        same_form_cps = set(load_codepoints(same_form_file)) if same_form_file else set()
+
         locl_sensitive = extract_locl_sensitive_codepoints(reference_path)
         target_rows: list[dict[str, Any]] = []
         for cp in tqdm(target_cps, desc="Preparing reference Han structures", unit="glyph"):
@@ -581,6 +586,22 @@ def prepare_project(cfg: dict[str, Any], force: bool = False) -> dict[str, Any]:
             complexity = float(ref_proxy[..., 1].mean())
             has_target = cp in target_paths
             target_path_value, target_proxy_value, target_aux_value = target_paths.get(cp, ("", "", ""))
+            if has_target and cp in same_form_cps and cp in valid_style_by_cp:
+                style_row = valid_style_by_cp[cp]
+                dataset_rows.append({
+                    "sample_id": f"style-cross-{cp:06X}",
+                    "codepoint": cp,
+                    "unicode": style_row["unicode"],
+                    "char": style_row["char"],
+                    "split": split_map.get(cp, "train"),
+                    "mode": "cross",
+                    "proxy_path": str(ref_proxy_path.resolve()),
+                    "target_path": style_row["target_path"],
+                    "target_aux_path": style_row["aux_path"],
+                    "sample_weight": 1.0,
+                    "structure_score": 0.0,
+                    "complexity": style_row["complexity"],
+                })
             target_metrics: dict[str, Any] = {}
             if has_target:
                 try:
@@ -650,8 +671,9 @@ def prepare_project(cfg: dict[str, Any], force: bool = False) -> dict[str, Any]:
         save_codepoints(audit_dir / "target_missing_added.txt", [int(row["codepoint"]) for row in target_rows if not int(row["has_target"])])
 
         dataset_stats = {
-            "method": "style-only self-reconstruction",
-            "cross_font_pair_rows": 0,
+            "method": "target self-reconstruction plus reviewed same-form cross pairs",
+            "cross_font_pair_rows": sum(1 for row in dataset_rows if row["mode"] == "cross"),
+            "same_form_chars_file": same_form_file,
             "style_samples": len(valid_style_rows),
             "dataset_rows": len(dataset_rows),
             "train_rows": sum(row["split"] == "train" for row in dataset_rows),

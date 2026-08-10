@@ -45,6 +45,7 @@ from .proxy import (
     make_reference_fallbacks,
     read_ink,
     read_proxy,
+    retarget_coarse_channel,
     save_ink,
 )
 from .retrieval import StyleAtlas, render_retrieval_candidate
@@ -94,9 +95,26 @@ def _autocast(device: torch.device, enabled: bool):
     return contextlib.nullcontext()
 
 
-def _read_proxy10(path: str | Path, size: int) -> np.ndarray:
+def _read_proxy10(
+    path: str | Path,
+    size: int,
+    *,
+    source_ink: np.ndarray | None = None,
+    target_stroke_radius: float | None = None,
+    skeleton_size: int | None = None,
+    threshold: float = 0.5,
+) -> np.ndarray:
     proxy4 = np.asarray(read_rgba_u8(path, size=int(size)), dtype=np.float32) / 255.0
-    return expand_proxy_channels(proxy4.clip(0.0, 1.0)).astype(np.float32)
+    proxy4 = proxy4.clip(0.0, 1.0)
+    if source_ink is not None and target_stroke_radius is not None and skeleton_size is not None:
+        proxy4 = retarget_coarse_channel(
+            proxy4,
+            source_ink,
+            target_stroke_radius=float(target_stroke_radius),
+            skeleton_size=int(skeleton_size),
+            threshold=float(threshold),
+        )
+    return expand_proxy_channels(proxy4).astype(np.float32)
 
 
 def _tensor_proxy(proxy: np.ndarray, device: torch.device) -> torch.Tensor:
@@ -380,6 +398,8 @@ def generate_fusion_and_select(cfg: dict[str, Any], *, output_subdir: str = "gen
     inference_size = int(fusion_inf.get("size", normal_inf.get("size", cfg["render"]["size"])))
     analysis_size = int(cfg["render"].get("analysis_size", 192))
     profile_size = int(cfg["render"].get("size", inference_size))
+    proxy_skeleton_size = int(cfg["render"].get("proxy_skeleton_size", 240))
+    render_threshold = float(cfg["render"].get("threshold", 0.5))
     maximum_border = float(normal_inf.get("maximum_border_ink", 0.015))
     threshold_offsets = [float(value) for value in fusion_inf.get(
         "threshold_offsets", normal_inf.get("threshold_offsets", [-0.10, -0.06, -0.03, 0.0, 0.03, 0.06, 0.10])
@@ -412,14 +432,24 @@ def generate_fusion_and_select(cfg: dict[str, Any], *, output_subdir: str = "gen
             if cp in processed:
                 continue
             try:
-                proxy_np = _read_proxy10(row["ref_proxy_path"], inference_size)
-                proxy_tensor = _tensor_proxy(proxy_np, device)
                 proxy_metrics = read_proxy(row["ref_proxy_path"])
                 reference_ink = read_ink(row["ref_path"])
                 if reference_ink.shape != (inference_size, inference_size):
                     reference_ink = cv2.resize(reference_ink, (inference_size, inference_size), interpolation=cv2.INTER_AREA)
                 profile = _style_profile_for_complexity(style_profiles, float(row.get("complexity", 0.0) or 0.0))
                 target_radius = float(profile.get("stroke_radius", {}).get("median", 3.0))
+                # The stored proxy's coarse channel carries the reference's stroke
+                # weight, which the model reproduces verbatim; retarget it to the
+                # target's weight so inference matches what training saw.
+                proxy_np = _read_proxy10(
+                    row["ref_proxy_path"],
+                    inference_size,
+                    source_ink=reference_ink,
+                    target_stroke_radius=target_radius,
+                    skeleton_size=proxy_skeleton_size,
+                    threshold=render_threshold,
+                )
+                proxy_tensor = _tensor_proxy(proxy_np, device)
                 reference_signature = topology_signature(
                     reference_ink,
                     size=int(topology_cfg.get("analysis_size", analysis_size)),
@@ -567,7 +597,19 @@ def generate_fusion_and_select(cfg: dict[str, Any], *, output_subdir: str = "gen
                     if save_all and source in source_dirs:
                         _save_family(source_dirs[source] / cp_filename(cp), family["mask"])
 
-                passing = [family for family in families.values() if family["validation"]["hard_pass"]]
+                # The reference fallback is a safety net, not a competitor, for the
+                # same reason it is one in backend_inference: every score in
+                # _evaluate_family measures similarity to the reference structure,
+                # and the fallback is derived from that structure, so its topology
+                # term is identically zero and no learned candidate can match it.
+                # Structure-locking does not exempt the native path from this, as
+                # was once assumed -- locked diffusion candidates still score
+                # 0.019-0.037 against the fallback's 0.000, and that residual is
+                # precisely the style being transferred. Measured over 98 common
+                # Han, letting the fallback compete rebuilt 28 glyphs from the
+                # reference that had already cleared the identical hard gate.
+                learned = [family for source, family in families.items() if source != "fallback"]
+                passing = [family for family in learned if family["validation"]["hard_pass"]]
                 if passing:
                     chosen = min(passing, key=lambda item: (float(item["total_score"]), -float(item["confidence"])))
                 else:

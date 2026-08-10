@@ -236,7 +236,6 @@ def _proxy_at_small_size(
     ink: np.ndarray,
     size: int,
     threshold: float,
-    canonical_radius: int,
     distance_clip: float,
 ) -> np.ndarray:
     resized = cv2.resize(
@@ -251,12 +250,7 @@ def _proxy_at_small_size(
         return np.zeros((size, size, 4), dtype=np.float32)
 
     skeleton = thin_binary(mask)
-    canonical = cv2.dilate(
-        skeleton,
-        ellipse_kernel(canonical_radius),
-        iterations=1,
-    ).astype(np.float32)
-    canonical = np.maximum(canonical, skeleton.astype(np.float32))
+    canonical = mask.astype(np.float32)
 
     skeleton_blur = cv2.GaussianBlur(
         skeleton.astype(np.float32),
@@ -286,25 +280,23 @@ def make_content_proxy(
     output_size: int = 384,
     skeleton_size: int = 160,
     threshold: float = 0.5,
-    canonical_radius_ratio: float = 0.0105,
     distance_clip_ratio: float = 0.075,
 ) -> np.ndarray:
-    """Build a style-reduced four-channel content representation.
+    """Build a four-channel content representation.
 
-    Channels are: fixed-width canonical stroke, blurred skeleton, signed
-    distance field and coarse occupancy.  The representation preserves the
-    character structure but removes most stroke weight, serif and terminal
-    details, allowing every valid target glyph to be used for self-training.
+    Channels are: raw stroke mask, blurred skeleton, signed distance field
+    and coarse occupancy. Channel 0 keeps the source's real stroke shape
+    (weight, serifs, terminals) so cross-font supervision can teach style
+    transfer directly; only channel 1 (skeleton) is reduced to a centreline
+    for endpoint/junction/centreline feature extraction.
     """
 
     skeleton_size = max(64, min(int(skeleton_size), int(output_size)))
-    radius = max(1, int(round(skeleton_size * float(canonical_radius_ratio))))
     distance_clip = max(4.0, skeleton_size * float(distance_clip_ratio))
     small = _proxy_at_small_size(
         ink,
         size=skeleton_size,
         threshold=float(threshold),
-        canonical_radius=radius,
         distance_clip=distance_clip,
     )
     if skeleton_size == output_size:
@@ -328,19 +320,22 @@ def retarget_coarse_channel(
 ) -> np.ndarray:
     """Rebuild the coarse occupancy channel at the target font's stroke weight.
 
-    Channels 0-2 are skeleton-derived and carry no stroke weight, but channel 3
-    is a blurred downsample of the raw mask, which is exactly a local ink
-    density map -- so it carries the source font's weight straight through.
-    Training only ever saw that channel at the target's weight, so feeding it a
-    reference-derived one asks the model to draw the reference's weight and it
-    obliges: measured over six common Han, output landed at 0.50 of the target
-    radius from a ref proxy and at 1.00 from a target proxy, with the channel's
-    density differing by 2.1-2.6x while channels 0-2 agreed within 17%.
+    Channel 3 is a blurred downsample of the raw mask -- a local ink density
+    map -- so it carries the source font's weight straight through. This was
+    written when channel 0 was a fixed-width skeleton redilation and self
+    training only ever saw channel 3 at target's weight, so a reference-shaped
+    input asked the model to draw the reference's weight (measured over six
+    common Han: 0.50 of the target radius from a ref proxy vs 1.00 from a
+    target proxy). Rebuilding channel 3 from a reference mask scaled to the
+    target's weight recovered 0.93 of the target radius.
 
-    Rebuilding the channel from a reference mask scaled to the target's weight
-    aligns inference with training and recovers 0.93 of the target radius. It is
-    an inference-only correction: ``make_content_proxy`` is shared with training
-    and must keep producing byte-identical target proxies.
+    Channel 0 now carries the source's real stroke shape directly (see
+    ``make_content_proxy``), and cross-font supervision means training no
+    longer sees channel 3 exclusively at target's weight either, so this
+    correction's premise needs re-measuring once that retrain lands -- it may
+    now be redundant or even fight the model's own learned weight mapping.
+    It is an inference-only correction: ``make_content_proxy`` is shared with
+    training and must keep producing byte-identical target proxies.
     """
 
     proxy = np.array(proxy4, dtype=np.float32, copy=True)
@@ -481,7 +476,7 @@ def proxy_from_binary_for_metrics(mask: np.ndarray) -> np.ndarray:
     src = (np.asarray(mask) > 0).astype(np.uint8)
     size = src.shape[0]
     skeleton = thin_binary(src)
-    canonical = cv2.dilate(skeleton, ellipse_kernel(max(1, size // 96))).astype(np.float32)
+    canonical = src.astype(np.float32)
     blur = cv2.GaussianBlur(skeleton.astype(np.float32), (0, 0), 0.8)
     if blur.max(initial=0.0) > 0:
         blur /= float(blur.max())

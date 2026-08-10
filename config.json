@@ -74,6 +74,7 @@
     "maximum_hole_centroid_chamfer": 0.038,
     "maximum_zone_skeleton_distance": 0.155,
     "maximum_topology_score": 0.06,
+    "maximum_tolerance_violations": 2,
     "structure_lock": true,
     "structure_lock_core_strength": 0.95,
     "structure_lock_radius_multiplier": 2.35

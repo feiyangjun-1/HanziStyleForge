@@ -87,22 +87,6 @@ def _cluster_count(mask: np.ndarray, minimum_area: int = 1) -> tuple[int, np.nda
     return len(points), point_map
 
 
-def _fast_morphological_skeleton(mask: np.ndarray) -> np.ndarray:
-    source = (mask > 0).astype(np.uint8)
-    skeleton = np.zeros_like(source)
-    element = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-    current = source.copy()
-    # Morphological skeletonization performs the heavy work inside OpenCV and
-    # is substantially faster than Python-level Zhang-Suen on full CJK sets.
-    for _ in range(max(source.shape) // 2 + 2):
-        opened = cv2.morphologyEx(current, cv2.MORPH_OPEN, element)
-        skeleton = cv2.bitwise_or(skeleton, cv2.subtract(current, opened))
-        current = cv2.erode(current, element)
-        if cv2.countNonZero(current) == 0:
-            break
-    return (skeleton > 0).astype(np.uint8)
-
-
 def topology_signature(
     mask_or_ink: np.ndarray,
     *,
@@ -120,7 +104,7 @@ def topology_signature(
             hint = cv2.resize(hint, (int(size), int(size)), interpolation=cv2.INTER_LINEAR)
         skeleton = (hint >= 0.42).astype(np.uint8)
     else:
-        skeleton = _fast_morphological_skeleton(mask)
+        skeleton = thin_binary(mask)
     skeleton = _prune_skeleton(skeleton, int(prune_iterations))
     kernel = np.ones((3, 3), dtype=np.uint8)
     kernel[1, 1] = 0
@@ -284,6 +268,23 @@ def topology_metrics(
     }
 
 
+#: Checks that decide whether a glyph is the *right character*: a missing or
+#: split radical, a counter that opened or closed, a hole in the wrong place, or
+#: part of the reference skeleton with no ink near it. These stay absolute vetoes
+#: -- one is enough to reject a candidate -- because they are what keeps a
+#: rebuilt glyph conformant to the regional standard. Every other check measures
+#: how far the candidate strays from the reference's exact geometry, which is
+#: also what style transfer is *supposed* to change, so those are counted and
+#: allowed up to `maximum_tolerance_violations` rather than vetoing outright.
+STRUCTURAL_REASONS = frozenset({
+    "component_delta",
+    "hole_delta",
+    "euler_delta",
+    "missing_skeleton",
+    "hole_position",
+})
+
+
 def validate_topology(metrics: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     reference = metrics.get("reference", {})
     max_endpoint_delta = max(
@@ -315,9 +316,14 @@ def validate_topology(metrics: dict[str, Any], config: dict[str, Any]) -> dict[s
         reasons.append("euler_delta")
     if float(metrics["topology_score"]) > float(config.get("maximum_topology_score", 0.085)):
         reasons.append("topology_score")
+    structural = [reason for reason in reasons if reason in STRUCTURAL_REASONS]
+    tolerance = [reason for reason in reasons if reason not in STRUCTURAL_REASONS]
+    allowance = int(config.get("maximum_tolerance_violations", 2))
     return {
-        "hard_pass": len(reasons) == 0,
+        "hard_pass": not structural and len(tolerance) <= allowance,
         "reasons": reasons,
+        "structural_reasons": structural,
+        "tolerance_reasons": tolerance,
         "endpoint_tolerance": int(max_endpoint_delta),
         "junction_tolerance": int(max_junction_delta),
     }

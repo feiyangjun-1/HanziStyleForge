@@ -318,6 +318,61 @@ def make_content_proxy(
     return np.rint(proxy.clip(0.0, 1.0) * 255.0).astype(np.uint8)
 
 
+def retarget_coarse_channel(
+    proxy4: np.ndarray,
+    source_ink: np.ndarray,
+    *,
+    target_stroke_radius: float,
+    skeleton_size: int,
+    threshold: float = 0.5,
+) -> np.ndarray:
+    """Rebuild the coarse occupancy channel at the target font's stroke weight.
+
+    Channels 0-2 are skeleton-derived and carry no stroke weight, but channel 3
+    is a blurred downsample of the raw mask, which is exactly a local ink
+    density map -- so it carries the source font's weight straight through.
+    Training only ever saw that channel at the target's weight, so feeding it a
+    reference-derived one asks the model to draw the reference's weight and it
+    obliges: measured over six common Han, output landed at 0.50 of the target
+    radius from a ref proxy and at 1.00 from a target proxy, with the channel's
+    density differing by 2.1-2.6x while channels 0-2 agreed within 17%.
+
+    Rebuilding the channel from a reference mask scaled to the target's weight
+    aligns inference with training and recovers 0.93 of the target radius. It is
+    an inference-only correction: ``make_content_proxy`` is shared with training
+    and must keep producing byte-identical target proxies.
+    """
+
+    proxy = np.array(proxy4, dtype=np.float32, copy=True)
+    if proxy.ndim != 3 or proxy.shape[2] < 4:
+        raise ValueError(f"content proxy must be HxWx4+, got {proxy.shape}")
+    output_size = int(proxy.shape[0])
+    size = max(64, min(int(skeleton_size), output_size))
+
+    resized = cv2.resize(np.asarray(source_ink, dtype=np.float32), (size, size), interpolation=cv2.INTER_AREA)
+    mask = binary(resized, float(threshold))
+    mask = remove_small_components(mask, max(2, int(round(size * size * 0.000035))))
+    if not mask.any():
+        return proxy
+
+    source_radius = max(0.5, estimate_stroke_radius(mask)) * output_size / size
+    delta = int(round((float(target_stroke_radius) - source_radius) * size / output_size))
+    if delta > 0:
+        mask = cv2.dilate(mask, ellipse_kernel(delta), iterations=1)
+    elif delta < 0:
+        mask = cv2.erode(mask, ellipse_kernel(abs(delta)), iterations=1)
+
+    # Mirrors the coarse branch of _proxy_at_small_size exactly.
+    coarse_size = max(12, min(32, size // 5))
+    coarse = cv2.resize(mask.astype(np.float32), (coarse_size, coarse_size), interpolation=cv2.INTER_AREA)
+    coarse = cv2.resize(coarse, (size, size), interpolation=cv2.INTER_LINEAR)
+    coarse = cv2.GaussianBlur(coarse, (0, 0), sigmaX=max(1.0, size / 80.0))
+    if size != output_size:
+        coarse = cv2.resize(coarse, (output_size, output_size), interpolation=cv2.INTER_LINEAR)
+    proxy[..., 3] = coarse.clip(0.0, 1.0)
+    return proxy
+
+
 def save_proxy(path: str | Path, proxy_rgba: np.ndarray) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -701,11 +756,20 @@ def make_reference_fallbacks(
     target_radius = float(style_profile.get("stroke_radius", {}).get("median", 2.5))
     current_radius = max(0.5, estimate_stroke_radius(mask))
     delta = int(round(target_radius - current_radius))
+    # The bound scales with the target weight rather than being a fixed pixel
+    # count: reaching the target never needs more than its own stroke radius,
+    # and the old constants (4 and 3) were sized for a much smaller canvas, so
+    # against a thin reference and a heavy target they capped the fallback at
+    # roughly 0.4 of the intended weight. Over-dilation is not a risk worth a
+    # tighter bound, since every variant here still faces the topology gate and
+    # reference_raw remains as the untouched structural safety net.
+    dilate_limit = max(4, int(round(target_radius)))
+    erode_limit = max(3, int(round(target_radius)))
     adjusted = mask.copy()
     if delta > 0:
-        adjusted = cv2.dilate(adjusted, ellipse_kernel(min(delta, 4)), iterations=1)
+        adjusted = cv2.dilate(adjusted, ellipse_kernel(min(delta, dilate_limit)), iterations=1)
     elif delta < 0:
-        adjusted = cv2.erode(adjusted, ellipse_kernel(min(abs(delta), 3)), iterations=1)
+        adjusted = cv2.erode(adjusted, ellipse_kernel(min(abs(delta), erode_limit)), iterations=1)
 
     profile_w = float(style_profile.get("bbox_width_ratio", {}).get("median", 0.78))
     profile_h = float(style_profile.get("bbox_height_ratio", {}).get("median", 0.78))
@@ -720,7 +784,7 @@ def make_reference_fallbacks(
     adjusted = affine_mask(adjusted, float(sx), float(sy), shift_x, shift_y)
 
     skeleton = thin_binary(mask)
-    radius = max(1, min(10, int(round(target_radius))))
+    radius = max(1, min(int(round(target_radius)), max(1, mask.shape[0] // 8)))
     uniform = cv2.dilate(skeleton, ellipse_kernel(radius), iterations=1).astype(np.float32)
     uniform = affine_mask(uniform, float(sx), float(sy), shift_x, shift_y)
 

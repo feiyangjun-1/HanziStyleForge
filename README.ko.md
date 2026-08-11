@@ -1,6 +1,6 @@
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-# HanziStyleForge Fusion
+# HanziStyleForge
 
 **한 글꼴의 스타일로, 다른 글꼴의 자형 기준에 따라 한자를 전부 다시 생성합니다.**
 
@@ -250,7 +250,7 @@ nvidia-smi --query-gpu=utilization.gpu --format=csv
 자기 결과물의 어디가 큰지 확인하려면:
 
 ```bash
-python tools/font_size_report.py build/target-HanziStyleForge-Fusion.ttf
+python tools/font_size_report.py build/target-HanziStyleForge.ttf
 ```
 
 테이블별 바이트 비중과 글자당 점 수 분포를 보여 줍니다.
@@ -310,14 +310,14 @@ Windows에서는 `verify.bat`을 더블클릭합니다. JSON 문법과 값 범�
 ## 결과물 위치
 
 ```text
-build/target-HanziStyleForge-Fusion.ttf               ← 완성된 글꼴
-build/target-HanziStyleForge-Fusion.ttf.report.json   ← 빌드 보고서
-work_hanzistyleforge_fusion_months/qa/index.html      ← QA 보고서. 브라우저로 여십시오
+build/target-HanziStyleForge.ttf               ← 완성된 글꼴
+build/target-HanziStyleForge.ttf.report.json   ← 빌드 보고서
+work/qa/index.html      ← QA 보고서. 브라우저로 여십시오
 ```
 
 **글꼴을 설치하기 전에 QA 보고서를 확인하십시오.** 참조·목표·생성 결과를 글자마다 나란히 보여 주므로, 잘 생성된 글자와 참조 자형으로 대체된 글자를 구분할 수 있습니다.
 
-학습 데이터, 체크포인트, 생성 진행 상태는 `work_hanzistyleforge_fusion_months/`에 저장되며 수십 GB에 이릅니다. **실행 중에는 삭제하지 마십시오.**
+학습 데이터, 체크포인트, 생성 진행 상태는 `work/`에 저장되며 수십 GB에 이릅니다. **실행 중에는 삭제하지 마십시오.**
 
 ---
 

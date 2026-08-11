@@ -423,7 +423,7 @@ def generate_fusion_and_select(cfg: dict[str, Any], *, output_subdir: str = "gen
     progress_interval = max(1, int(fusion_inf.get("progress_checkpoint_interval", 32)))
     processed = {int(row["codepoint"]) for row in selection_rows}
     guard = LongRunGuard(cfg)
-    progress = tqdm(total=len(rows), initial=len(selection_rows), desc="HanziStyleForge Fusion full generation", unit="glyph")
+    progress = tqdm(total=len(rows), initial=len(selection_rows), desc="HanziStyleForge full generation", unit="glyph")
     completed_since_checkpoint = 0
 
     try:

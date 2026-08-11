@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-title HanziStyleForge Fusion - Installer
+title HanziStyleForge - Installer
 
 echo [1/7] Checking Python...
 where py >nul 2>nul

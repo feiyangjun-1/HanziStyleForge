@@ -6,11 +6,11 @@ if not exist ".venv\Scripts\python.exe" goto :not_installed
 if errorlevel 1 goto :failed
 .venv\Scripts\python.exe hanzistyleforge.py --config config.json check
 if errorlevel 1 goto :failed
-if exist "work_hanzistyleforge_fusion_months\dataset\index.csv" (
+if exist "work\dataset\index.csv" (
   .venv\Scripts\python.exe hanzistyleforge.py --config config.json contract
   if errorlevel 1 goto :failed
 )
-echo HanziStyleForge Fusion project verification completed successfully.
+echo HanziStyleForge project verification completed successfully.
 pause
 exit /b 0
 :not_installed

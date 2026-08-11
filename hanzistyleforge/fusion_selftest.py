@@ -90,4 +90,4 @@ def run_fusion_selftest() -> None:
 
 if __name__ == "__main__":
     run_fusion_selftest()
-    print("HanziStyleForge Fusion self-test: OK")
+    print("HanziStyleForge self-test: OK")

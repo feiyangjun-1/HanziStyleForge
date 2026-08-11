@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
-title HanziStyleForge Fusion - Months Mode
+title HanziStyleForge - Months Mode
 if not exist ".venv\Scripts\python.exe" goto :not_installed
 if exist "STOP_AFTER_CHECKPOINT" del /q "STOP_AFTER_CHECKPOINT" >nul 2>nul
 set /a ATTEMPT=0
@@ -9,7 +9,7 @@ set /a ATTEMPT=0
 set /a ATTEMPT+=1
 echo.
 echo ============================================================
-echo HanziStyleForge Fusion months run - attempt !ATTEMPT!
+echo HanziStyleForge months run - attempt !ATTEMPT!
 echo All major stages and every generated glyph are checkpointed.
 echo ============================================================
 .venv\Scripts\python.exe hanzistyleforge.py --config config.json fusion-auto-months
@@ -25,7 +25,7 @@ timeout /t 60 /nobreak >nul
 goto :restart
 :done
 echo.
-echo Complete. See build\target-HanziStyleForge-Fusion.ttf
+echo Complete. See build\target-HanziStyleForge.ttf
 pause
 exit /b 0
 :safe_stopped

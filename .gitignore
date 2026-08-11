@@ -5,13 +5,12 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
-work_hanzistyleforge_fusion_months/*
-!work_hanzistyleforge_fusion_months/.gitkeep
+work/*
+!work/.gitkeep
 work_hanzistyleforge_fusion_fast/*
 !work_hanzistyleforge_fusion_fast/.gitkeep
 # Work directories for any other configuration, including backend runs.
 work_*/
-!work_hanzistyleforge_fusion_months/
 !work_hanzistyleforge_fusion_fast/
 build/*
 !build/.gitkeep

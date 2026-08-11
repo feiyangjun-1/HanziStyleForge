@@ -1,6 +1,6 @@
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-# HanziStyleForge Fusion
+# HanziStyleForge
 
 **Regenerate every Han character in one font's style, following another font's glyph standard.**
 
@@ -250,7 +250,7 @@ The other knobs barely matter: dropping `maximum_points_per_contour` from 480 to
 To see where your own file's bytes actually went:
 
 ```bash
-python tools/font_size_report.py build/target-HanziStyleForge-Fusion.ttf
+python tools/font_size_report.py build/target-HanziStyleForge.ttf
 ```
 
 It lists bytes per table and the point-count distribution per glyph.
@@ -310,14 +310,14 @@ Run `./run.sh` again to continue from the checkpoint.
 ## Where the output goes
 
 ```text
-build/target-HanziStyleForge-Fusion.ttf               ← the font
-build/target-HanziStyleForge-Fusion.ttf.report.json   ← build report
-work_hanzistyleforge_fusion_months/qa/index.html      ← QA report, open in a browser
+build/target-HanziStyleForge.ttf               ← the font
+build/target-HanziStyleForge.ttf.report.json   ← build report
+work/qa/index.html      ← QA report, open in a browser
 ```
 
 **Read the QA report before installing the font.** It shows every glyph side by side with the reference and the target, so you can see which characters came out well and which fell back to the reference shape.
 
-Training data, checkpoints and generation progress live in `work_hanzistyleforge_fusion_months/`. It runs to tens of gigabytes. **Do not delete it while a run is in progress.**
+Training data, checkpoints and generation progress live in `work/`. It runs to tens of gigabytes. **Do not delete it while a run is in progress.**
 
 ---
 

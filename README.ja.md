@@ -1,6 +1,6 @@
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-# HanziStyleForge Fusion
+# HanziStyleForge
 
 **あるフォントのスタイルで、別のフォントの字形基準に従い、漢字をすべて生成し直します。**
 
@@ -250,7 +250,7 @@ nvidia-smi --query-gpu=utilization.gpu --format=csv
 自分の成果物のどこが大きいのかを調べるには：
 
 ```bash
-python tools/font_size_report.py build/target-HanziStyleForge-Fusion.ttf
+python tools/font_size_report.py build/target-HanziStyleForge.ttf
 ```
 
 テーブルごとのバイト内訳と、字ごとの点数分布を表示します。
@@ -310,14 +310,14 @@ Windows では `verify.bat` をダブルクリックします。JSON の構文�
 ## 出力先
 
 ```text
-build/target-HanziStyleForge-Fusion.ttf               ← 完成したフォント
-build/target-HanziStyleForge-Fusion.ttf.report.json   ← ビルドレポート
-work_hanzistyleforge_fusion_months/qa/index.html      ← QA レポート。ブラウザーで開きます
+build/target-HanziStyleForge.ttf               ← 完成したフォント
+build/target-HanziStyleForge.ttf.report.json   ← ビルドレポート
+work/qa/index.html      ← QA レポート。ブラウザーで開きます
 ```
 
 **フォントを入れる前に QA レポートを確認してください。** 参照・目標・生成結果を一字ずつ並べてあるので、うまく生成できた字と参照字形にフォールバックした字が見分けられます。
 
-学習データ、チェックポイント、生成の進捗は `work_hanzistyleforge_fusion_months/` に入り、数十 GB になります。**実行中は削除しないでください。**
+学習データ、チェックポイント、生成の進捗は `work/` に入り、数十 GB になります。**実行中は削除しないでください。**
 
 ---
 

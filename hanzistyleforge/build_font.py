@@ -605,7 +605,7 @@ def build_font(cfg: dict[str, Any]) -> dict[str, Any]:
     durable_replace(temporary_output, output_path)
     report = {
         "version": CHECKPOINT_FORMAT_VERSION,
-        "program": "HanziStyleForge Fusion",
+        "program": "HanziStyleForge",
         "output_font": str(output_path.resolve()),
         "target_han_count": len(target),
         "counts": counts,

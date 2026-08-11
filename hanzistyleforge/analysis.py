@@ -179,7 +179,7 @@ def check_environment(cfg: dict[str, Any]) -> dict[str, Any]:
                 "Use a reference font with a smaller character set that still meets your requirements."
             )
     return {
-        "program": "HanziStyleForge Fusion",
+        "program": "HanziStyleForge",
         "checkpoint_format": CHECKPOINT_FORMAT_VERSION,
         "target": target,
         "reference": reference,
@@ -716,7 +716,7 @@ def prepare_project(cfg: dict[str, Any], force: bool = False) -> dict[str, Any]:
         )
 
         summary = {
-            "program": "HanziStyleForge Fusion",
+            "program": "HanziStyleForge",
             "checkpoint_format": CHECKPOINT_FORMAT_VERSION,
             "method": "all valid target Han self-reconstruction; ref content only; no cross-font pairs",
             "automatic_reference_classification": False,

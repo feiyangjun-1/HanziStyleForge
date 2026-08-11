@@ -18,7 +18,7 @@ while :; do
   attempt=$((attempt + 1))
   echo
   echo "============================================================"
-  echo " HanziStyleForge Fusion - attempt $attempt of $MAX_ATTEMPTS"
+  echo " HanziStyleForge - attempt $attempt of $MAX_ATTEMPTS"
   echo " Interrupting is safe. Run this script again to resume."
   echo "============================================================"
   .venv/bin/python hanzistyleforge.py --config "$CONFIG" fusion-auto-months

@@ -1,6 +1,6 @@
 [简体中文](README.md) | [English](README.en.md) | [日本語](README.ja.md) | [한국어](README.ko.md)
 
-# HanziStyleForge Fusion
+# HanziStyleForge
 
 **用一个字体的风格，按另一个字体的字形标准，重新生成全部汉字。**
 
@@ -250,7 +250,7 @@ nvidia-smi --query-gpu=utilization.gpu --format=csv
 想知道自己的成品到底大在哪：
 
 ```bash
-python tools/font_size_report.py build/target-HanziStyleForge-Fusion.ttf
+python tools/font_size_report.py build/target-HanziStyleForge.ttf
 ```
 
 它会按表列出字节占比和每个字的点数分布。
@@ -310,14 +310,14 @@ Linux / macOS 用 `./verify.sh`。它会检查 JSON 语法和取值范围。JSON
 ## 产出在哪
 
 ```text
-build/target-HanziStyleForge-Fusion.ttf        ← 成品字体
-build/target-HanziStyleForge-Fusion.ttf.report.json   ← 构建报告
-work_hanzistyleforge_fusion_months/qa/index.html      ← 质检报告，用浏览器打开
+build/target-HanziStyleForge.ttf        ← 成品字体
+build/target-HanziStyleForge.ttf.report.json   ← 构建报告
+work/qa/index.html      ← 质检报告，用浏览器打开
 ```
 
 **装字体之前先看质检报告。** 里面有逐字对照图，能看出哪些字生成得好、哪些回退成了参考字形。
 
-训练数据、模型存档和生成进度都在 `work_hanzistyleforge_fusion_months/`，几十 GB，**跑的过程中别删**。
+训练数据、模型存档和生成进度都在 `work/`，几十 GB，**跑的过程中别删**。
 
 ---
 

@@ -1190,7 +1190,7 @@ def main() -> None:
     run_training_stage_name_selftest()
     run_ema_resume_selftest()
     run_backend_selftest()
-    print("HanziStyleForge Fusion self-test: OK")
+    print("HanziStyleForge self-test: OK")
 
 
 if __name__ == "__main__":

@@ -242,7 +242,7 @@ def command_fusion_auto_months(cfg: dict[str, Any], force: bool = False, backend
     command_build(cfg)
     work = Path(cfg["paths"]["work_dir"])
     print(
-        f"\nHanziStyleForge Fusion completed: {Path(cfg['paths']['output_font']).resolve()}"
+        f"\nHanziStyleForge completed: {Path(cfg['paths']['output_font']).resolve()}"
         f"\nCoverage: {(work / 'generated' / 'coverage.json').resolve()}"
         f"\nQA: {(work / 'qa' / 'index.html').resolve()}"
         f"\nPer-glyph selection: {(work / 'refined' / 'selection.csv').resolve()}"

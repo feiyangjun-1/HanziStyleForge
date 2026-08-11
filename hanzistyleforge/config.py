@@ -26,8 +26,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "paths": {
         "target_font": "fonts/target.ttf",
         "reference_font": "refs/ref.otf",
-        "work_dir": "work_hanzistyleforge_fusion_months",
-        "output_font": "build/target-HanziStyleForge-Fusion.ttf",
+        "work_dir": "work",
+        "output_font": "build/target-HanziStyleForge.ttf",
     },
     "scope": {
         "mode": "reference_han",
@@ -564,8 +564,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "curve_simplify": 1.2,
         "corner_angle_degrees": 100.0,
         "maximum_points_per_contour": 480,
-        "family_suffix": " HanziStyleForge Fusion",
-        "postscript_suffix": "HanziStyleForgeFusion",
+        "family_suffix": " HanziStyleForge",
+        "postscript_suffix": "HanziStyleForge",
         "replace_strategy": "new_glyph_and_remap",
         "preserve_non_han": True,
         "verify_non_han_outlines": True,

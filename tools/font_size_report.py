@@ -6,7 +6,7 @@ distribution second.  Run it against a hand-designed font to get a baseline
 before deciding how far to push build.curve_simplify.
 
     python tools/font_size_report.py fonts/target.ttf
-    python tools/font_size_report.py build/target-HanziStyleForge-Fusion.ttf
+    python tools/font_size_report.py build/target-HanziStyleForge.ttf
 """
 
 from __future__ import annotations

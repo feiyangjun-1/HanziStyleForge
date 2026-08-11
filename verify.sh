@@ -12,7 +12,7 @@ echo "Running the self-test..."
 echo "Checking your fonts and GPU..."
 .venv/bin/python hanzistyleforge.py --config "$CONFIG" check
 
-if [ -f work_hanzistyleforge_fusion_months/dataset/index.csv ]; then
+if [ -f work/dataset/index.csv ]; then
   echo "Checking the data-flow contract..."
   .venv/bin/python hanzistyleforge.py --config "$CONFIG" contract
 fi

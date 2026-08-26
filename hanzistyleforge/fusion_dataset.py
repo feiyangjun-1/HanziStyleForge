@@ -12,7 +12,7 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-from .dataset import _read_proxy4
+from .dataset import _read_proxy4, _style_strip_proxy4
 from .features import expand_proxy_channels, target_aux_from_path
 from .image_cache import read_gray_u8
 from .util import read_csv
@@ -291,6 +291,7 @@ class FusionDiffusionDataset(Dataset):
         hard_codepoints: set[int] | None = None,
         hard_repeat: int = 4,
         seed: int = 20260719,
+        style_strip: bool = True,
     ) -> None:
         rows = [row for row in read_csv(index_csv) if row.get("mode") in ("self", "cross") and row.get("split") == split]
         if hard_codepoints:
@@ -304,6 +305,7 @@ class FusionDiffusionDataset(Dataset):
         self.style_references = int(style_references)  # retained for config compatibility
         self.style_groups = max(1, int(style_groups))
         self.augment = bool(augment)
+        self.style_strip = bool(style_strip)
         self.seed = int(seed)
 
     def __len__(self) -> int:
@@ -312,7 +314,13 @@ class FusionDiffusionDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, Any]:
         row = self.rows[index]
         cp = int(row["codepoint"])
-        proxy = expand_proxy_channels(_read_proxy4(row["proxy_path"], self.size))
+        proxy4 = _read_proxy4(row["proxy_path"], self.size)
+        # A self row's input silhouette is its own answer at 0.986 Dice, so the
+        # cheapest solution is to copy it and style is never learned. A cross
+        # row already reads a different font and is left alone.
+        if self.augment and self.style_strip and row.get("mode", "self") == "self":
+            proxy4 = _style_strip_proxy4(proxy4)
+        proxy = expand_proxy_channels(proxy4)
         target_aux = target_aux_from_path(row["target_path"], row.get("target_aux_path", ""), self.size)
         rng = random.Random(self.seed + index * 65537 + random.randrange(1 << 20))
         if self.augment:
@@ -410,6 +418,7 @@ class FusionRefinerDataset(Dataset):
         style_groups: int = 12,
         augment: bool = False,
         seed: int = 20260719,
+        style_strip: bool = True,
     ) -> None:
         self.rows = [
             row for row in read_csv(index_csv)
@@ -422,6 +431,7 @@ class FusionRefinerDataset(Dataset):
         self.style_references = int(style_references)  # retained for config compatibility
         self.style_groups = max(1, int(style_groups))
         self.augment = bool(augment)
+        self.style_strip = bool(style_strip)
         self.seed = int(seed)
 
     def __len__(self) -> int:
@@ -430,7 +440,10 @@ class FusionRefinerDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, Any]:
         row = self.rows[index]
         cp = int(row["codepoint"])
-        proxy = expand_proxy_channels(_read_proxy4(row["proxy_path"], self.size))
+        proxy4 = _read_proxy4(row["proxy_path"], self.size)
+        if self.augment and self.style_strip and row.get("mode", "self") == "self":
+            proxy4 = _style_strip_proxy4(proxy4)
+        proxy = expand_proxy_channels(proxy4)
         target_aux = target_aux_from_path(row["target_path"], row.get("target_aux_path", ""), self.size)
         rng = random.Random(self.seed + index * 524287 + random.randrange(1 << 20))
         clean = target_aux[..., 0]

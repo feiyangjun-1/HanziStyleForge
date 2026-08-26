@@ -463,6 +463,7 @@ def _run_phase(
             pin,
             balanced=balanced,
             samples_per_epoch=samples_per_epoch,
+            style_strip=bool(cfg["training"].get("self_mode_style_strip", True)),
         )
 
     optimizer = torch.optim.AdamW(

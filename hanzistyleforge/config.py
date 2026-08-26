@@ -149,6 +149,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "image_cache_mb_per_process": 192,
         "prefetch_factor": 4,
         "validation_ratio": 0.06,
+        # A self row's input silhouette matches its own answer at 0.986 Dice
+        # since make_content_proxy started carrying the raw stroke mask, so
+        # copying the input is very nearly optimal and style is never learned.
+        # This strips weight and corner shape out of self rows' channel 0.
+        # Cross rows are untouched: their input is already another font.
+        "self_mode_style_strip": True,
         "base_channels": 36,
         "weight_decay": 8e-05,
         "gradient_clip": 0.8,

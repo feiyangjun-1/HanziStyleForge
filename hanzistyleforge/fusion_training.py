@@ -1762,6 +1762,7 @@ def _train_diffusion_phase(
         style_groups=int(style_bank.get("group_count", 12)), augment=True, hard_codepoints=hard_codepoints,
         hard_repeat=int(phase.get("hard_repeat", 5)),
         seed=int(cfg["training"].get("seed", 20260719)) + int(phase.get("seed_offset", 0)),
+        style_strip=bool(cfg["training"].get("self_mode_style_strip", True)),
     )
     val_dataset = FusionDiffusionDataset(
         index_path, split="val", size=size, style_size=style_size, style_references=style_refs,
@@ -2230,6 +2231,7 @@ def train_fusion_refiner(cfg: dict[str, Any]) -> dict[str, Any]:
             index_path, split="train", size=phase["size"], style_size=phase["style_size"],
             style_references=phase["style_references"], style_groups=int(style_bank.get("group_count", 12)), augment=True,
             seed=int(cfg["training"].get("seed", 20260719)) + 71,
+            style_strip=bool(cfg["training"].get("self_mode_style_strip", True)),
         ),
         phase["batch_size"], workers, shuffle=True,
     )

@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 
 from .features import expand_proxy_channels, target_aux_from_path
 from .image_cache import read_rgba_u8
+from .proxy import ellipse_kernel, thin_binary
 from .util import read_csv
 
 
@@ -76,6 +77,82 @@ def _morph_channel(channel: np.ndarray, delta: int) -> np.ndarray:
     return cv2.erode(channel, kernel)
 
 
+def _rebuild_dependent_channels(proxy4: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Recompute the proxy channels derived from the stroke mask.
+
+    Channels 2 and 3 are functions of channel 0, so perturbing channel 0 alone
+    leaves the target's real stroke weight readable from channel 3, which is a
+    local ink-density map and is exactly what the perturbation is trying to
+    hide. Channel 1 is the centreline and carries structure rather than style,
+    so it is kept.
+    """
+
+    size = int(mask.shape[0])
+    result = proxy4.copy()
+    result[..., 0] = mask.astype(np.float32)
+
+    # Mirrors the signed-distance branch of _proxy_at_small_size, with its
+    # clip distance scaled from the 240 px proxy scale to this working size.
+    distance_clip = max(4.0, 240.0 * 0.075) * size / 240.0
+    solid = (mask > 0).astype(np.uint8)
+    inside = cv2.distanceTransform(solid, cv2.DIST_L2, 5)
+    outside = cv2.distanceTransform(1 - solid, cv2.DIST_L2, 5)
+    signed = np.clip((inside - outside) / max(distance_clip, 1.0), -1.0, 1.0)
+    result[..., 2] = (signed + 1.0) * 0.5
+
+    coarse_size = max(12, min(32, size // 5))
+    coarse = cv2.resize(mask.astype(np.float32), (coarse_size, coarse_size), interpolation=cv2.INTER_AREA)
+    coarse = cv2.resize(coarse, (size, size), interpolation=cv2.INTER_LINEAR)
+    result[..., 3] = cv2.GaussianBlur(coarse, (0, 0), sigmaX=max(1.0, size / 80.0)).clip(0.0, 1.0)
+    return result.clip(0.0, 1.0)
+
+
+def _style_strip_proxy4(proxy4: np.ndarray) -> np.ndarray:
+    """Remove the answer's own stroke style from a self-reconstruction input.
+
+    A self row's channel 0 is the target's raw stroke mask and its answer is
+    that same glyph, so the input silhouette matches the answer at 0.986 Dice:
+    copying the input scores almost perfectly and the model has no reason to
+    learn style at all. Measured consequence: it learns to thicken the input
+    with a round brush, which rounds convex corners and leaves the concave
+    ones sharp -- generated 国 kept a square counter while the target's is
+    round.
+
+    At inference the model is fed the reference's raw mask, which is thinner
+    and square-cornered, so the perturbations below are chosen to span that:
+    uniform-width redilation destroys weight and terminal shape outright,
+    large morphology decorrelates weight from the answer, and a rectangular
+    closing squares off the target's round corners.
+    """
+
+    size = int(proxy4.shape[0])
+    scale = size / 240.0
+    mask = (proxy4[..., 0] >= 0.5).astype(np.uint8)
+    if not mask.any():
+        return proxy4
+
+    roll = random.random()
+    if roll < 0.45:
+        # Uniform width from the centreline: no weight, no terminal shape.
+        skeleton = thin_binary(mask)
+        radius = max(1, int(round(random.uniform(1.0, 5.0) * scale)))
+        mask = cv2.dilate(skeleton, ellipse_kernel(radius), iterations=1)
+    elif roll < 0.85:
+        delta = random.choice([-3, -2, -1, 1, 2, 3])
+        radius = max(1, int(round(abs(delta) * scale)))
+        mask = _morph_channel(mask, radius if delta > 0 else -radius)
+
+    if random.random() < 0.40:
+        # A rectangular closing squares off rounded corners, which is the
+        # single style cue the round-brush shortcut never had to unlearn.
+        side = max(3, int(round(random.uniform(3.0, 7.0) * scale)) | 1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((side, side), np.uint8))
+
+    if not mask.any():
+        return proxy4
+    return _rebuild_dependent_channels(proxy4, mask)
+
+
 def _proxy_jitter(proxy: np.ndarray) -> np.ndarray:
     result = proxy.copy()
     # Deliberately vary canonical stroke width while preserving the target.
@@ -131,20 +208,33 @@ def _corrupt_glyph(clean: np.ndarray) -> np.ndarray:
 
 
 class GlyphStyleDataset(Dataset):
-    def __init__(self, index_csv: str | Path, split: str, size: int, augment: bool = False) -> None:
+    def __init__(
+        self,
+        index_csv: str | Path,
+        split: str,
+        size: int,
+        augment: bool = False,
+        style_strip: bool = True,
+    ) -> None:
         rows = read_csv(index_csv)
         self.rows = [row for row in rows if row.get("split") == split]
         if not self.rows:
             raise RuntimeError(f"The training manifest has no samples for split={split!r}.")
         self.size = int(size)
         self.augment = bool(augment)
+        self.style_strip = bool(style_strip)
 
     def __len__(self) -> int:
         return len(self.rows)
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         row = self.rows[index]
-        proxy = expand_proxy_channels(_read_proxy4(row["proxy_path"], self.size))
+        proxy4 = _read_proxy4(row["proxy_path"], self.size)
+        # Only self rows can read their answer off their own input; a cross row
+        # is already a genuinely different font's structure.
+        if self.augment and self.style_strip and row.get("mode", "self") == "self":
+            proxy4 = _style_strip_proxy4(proxy4)
+        proxy = expand_proxy_channels(proxy4)
         target_aux = target_aux_from_path(
             row["target_path"], row.get("target_aux_path", ""), self.size
         )
@@ -226,6 +316,12 @@ def _balanced_weights(rows: list[dict[str, Any]]) -> list[float]:
     # The upper complexity bins are slightly oversampled because they are the
     # characters most likely to lose short strokes or close counters.
     weights *= 1.0 + 0.16 * bins
+    # A cross row is the only place the model is shown a real reference glyph
+    # paired with the target's answer, so it is the only input distribution
+    # that matches inference. Raising its share from 26% to 62% of sampled
+    # batches was measured over a 20-epoch direct256 run and did not help:
+    # Dice against target went 0.928 -> 0.911 and counter corner rounding
+    # 2.7 -> 2.8 px against the target's 2.0. Left at the original weight.
     modes = [row.get("mode", "self") for row in rows]
     weights *= np.asarray([1.0 if mode == "self" else 0.55 for mode in modes], dtype=np.float64)
     weights /= max(float(weights.mean()), 1e-8)
@@ -259,8 +355,9 @@ def make_style_loaders(
     *,
     balanced: bool = True,
     samples_per_epoch: int = 0,
+    style_strip: bool = True,
 ) -> tuple[DataLoader, DataLoader]:
-    train = GlyphStyleDataset(index_csv, "train", size=size, augment=True)
+    train = GlyphStyleDataset(index_csv, "train", size=size, augment=True, style_strip=style_strip)
     val = GlyphStyleDataset(index_csv, "val", size=size, augment=False)
     common = _loader_options(workers, pin_memory)
     return (

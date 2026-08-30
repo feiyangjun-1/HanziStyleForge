@@ -53,3 +53,6 @@ lock_effect_zoom/
 quicktest_corner/
 quick_direct_test_output/
 *.log
+
+# The reviewed same-form character list is the user's own work, not shipped.
+data/same_form_han.txt

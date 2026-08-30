@@ -37,3 +37,19 @@ STOP_AFTER_CHECKPOINT
 data/cjkvi-ids/*
 !data/cjkvi-ids/.gitkeep
 *_cmp.png
+
+# Diagnostic renders written while investigating generation quality.
+cmp_direct.png
+smooth_test.png
+source_zoom.png
+style_strip_preview.png
+squarify_test.png
+scratch_outputs/
+same_form_review/
+corner_diagnosis/
+family_diagnosis/
+inner_corner_zoom/
+lock_effect_zoom/
+quicktest_corner/
+quick_direct_test_output/
+*.log

@@ -2,367 +2,262 @@
 
 # HanziStyleForge
 
-**用一个字体的风格，按另一个字体的字形标准，重新生成全部汉字。**
+用一个字体的风格，按另一个字体的字形标准，重新生成全部汉字。
 
-工具会学习目标字体的笔画风格，然后照着参考字体的字形结构，把参考字体覆盖的**每一个**汉字重新画一遍，最后打包成可以直接安装的 `.ttf`。
-
-注意是"重新生成"而不是"补缺"：即使目标字体里已经有这个字，也会按参考字形重画。这样整套字才是统一的。
+工具从目标字体学笔画风格，按参考字体的结构把参考字体覆盖的每一个汉字重画一遍，打包成可安装的 `.ttf`。即使目标字体里已有这个字也会重画，这样整套字才统一。
 
 两种典型用法：
 
-- **扩充字数。** 目标字体只做了几千字，想扩到两万多字
-- **改字形标准。** 目标字体是台标（或日标、韩标）字形，想改成大陆规范——把 `ref.otf` 换成大陆版参考字体即可，风格保留，字形按新标准重画
+- 扩充字数。目标字体只做了几千字，扩到两万多字
+- 改字形标准。目标字体是台标（或日标、韩标）字形，换成大陆版参考字体即可按新标准重画，风格保留
 
-> 实验性项目。完整跑一次要几天到几周，中途可以随时中断，下次接着跑。
-
----
-
-## 你需要准备两个字体
-
-| 文件 | 作用 | 说明 |
-|---|---|---|
-| `fonts/target.ttf` | **风格来源** | 你喜欢的那个字体。程序只从它学"笔画长什么样" |
-| `refs/ref.otf` | **字形来源** | 一个字数齐全的字体。程序按它的字形结构来画 |
-
-举例：`target.ttf` 放思源黑体改的手写风字体，`refs/ref.otf` 放思源黑体本体，产出就是"手写风格 + 思源黑体字形标准"的完整字体。
-
-**字形标准由 `ref.otf` 决定。** 想要大陆规范就放大陆版参考字体，想要台湾、香港、日本、韩国标准就换对应的。程序不会自己判断哪种"更对"。
-
-### 对字体文件的要求
-
-- 静态字体。**可变字体、TTC、OTC 不支持**
-- `target.ttf` 要是 TrueType（含 `glyf` 表）
-- `ref.otf` 可以是 TrueType 或 CFF/OTF
+> 实验性项目。完整跑一次要几天到几周，中途可随时中断续跑。
 
 ---
 
-## 硬件要求
+## 准备
 
-**必须有 NVIDIA 显卡。** 训练是这个项目的主体，没有 CUDA 就跑不动。
+### 两个字体（必需）
 
-| 平台 | 能否训练 |
+| 文件 | 作用 |
 |---|---|
-| Windows + NVIDIA | 可以 |
-| Linux + NVIDIA | 可以 |
-| macOS | **不行**。Mac 没有 NVIDIA 显卡，Apple 的 MPS 也未支持，只能用 CPU，慢到不现实 |
-| 无独显的 Linux / Windows | 同上 |
+| `fonts/target.ttf` | 风格来源。程序只从它学笔画长什么样 |
+| `refs/ref.otf` | 字形来源。程序按它的结构画，也由它决定生成哪些字 |
 
-其他要求：Python 3.10-3.14，建议至少 150 GB 空闲磁盘。显存 12 GB 够用（默认配置就是按 12 GB 调的）。
+按文件名主干匹配，后缀不限：`refs/ref.ttf` 同样有效。
 
-在 Mac 上你仍然可以安装并运行自检、检查字体、或者把已经生成好的字形图片打包成字体，但训练请找一台有 N 卡的机器。
+字形标准由 `ref` 决定。想要大陆规范就放大陆版，想要台港日韩标准就换对应的，程序不判断哪种更对。
+
+要求静态字体，不支持可变字体、TTC、OTC。`target` 需含 `glyf` 表（TrueType），`ref` 可以是 TrueType 或 CFF/OTF。
+
+### 同形字表（可选，但影响质量）
+
+`data/same_form_han.txt`，仓库不含，需自己准备。列出两个字体**结构相同**（部件与布局一致、只有风格差异）的字。
+
+有这个文件时，`prepare` 会为每个字建一条「参考结构 → 目标字形」的训练样本，这是模型唯一一次见到真实参考字体作为输入的机会。没有则只做目标字体自重建，能跑，但模型在训练中从未见过生成时实际会遇到的输入。
+
+结构不同的字**不能**放进去——那等于教模型把一种地区字形转成另一种，与参考字体的用途相反。
+
+格式和制作方法见 [data/README.md](data/README.md)。简单说：自动筛选只能缩小范围，拓扑比较看不出日式字形、错误起收笔这类差异，最后仍需逐字过目。
 
 ---
 
-## 不同显存怎么设置
+## 硬件
 
-默认配置 `config.json` 是按 **12 GB 显存**调好的，12 GB 的卡直接用，不用改任何东西。
+必须有 NVIDIA 显卡，没有 CUDA 跑不动训练。
 
-下面是在 RTX 5070 Ti Laptop（11.9 GB）上实测的单步峰值显存，推荐值都是从这里算出来的：
+| 平台 | 训练 |
+|---|---|
+| Windows / Linux + NVIDIA | 可以 |
+| macOS | 不行。无 NVIDIA 显卡，Apple MPS 未支持 |
+| 无独显 | 不行 |
 
-| 阶段 | 分辨率 | 每多一个样本 | 固定开销 |
-|---|---|---|---|
-| VQ 自编码器 | 256 / 384 / 512 | 0.37 / 0.83 / 1.47 GB | 约 0.13 GB |
-| 扩散（含 VQ、风格编码器、EMA） | 256 / 384 / 512 | 0.34 / 0.76 / 1.35 GB | 约 0.44 GB |
-| 精修 | 384 | 0.62 GB | 约 0.40 GB |
+Python 3.10-3.14，建议 150 GB 空闲磁盘。显存 12 GB 够用，默认配置按此调校。
+
+Mac 上仍可安装、自检、检查字体，或把已生成的字形图片打包成字体，训练需另找 N 卡机器。
+
+---
+
+## 开始
+
+### Windows
+
+| 步骤 | 双击 | 说明 |
+|---|---|---|
+| 1 | `install.bat` | 装环境，只需一次 |
+| 2 | — | 字体放进 `fonts\` 和 `refs\` |
+| 3 | `verify.bat` | 检查 |
+| 4 | `run.bat` | 开跑 |
+
+`stop.bat` 在下一个存档点安全退出，再双击 `run.bat` 接着跑。
+
+### Linux / macOS
+
+```bash
+./install.sh          # 装环境
+./verify.sh           # 放好字体后检查
+./run.sh              # 开跑；./stop.sh 暂停
+```
+
+提示 `Permission denied` 时先 `chmod +x *.sh`。
+
+---
+
+## 产出
+
+```text
+build/target-HanziStyleForge.ttf              成品字体
+build/target-HanziStyleForge.ttf.report.json  构建报告
+work/qa/index.html                            质检报告
+```
+
+装字体前先看质检报告，里面有逐字对照图，能看出哪些字生成得好、哪些回退成了参考字形。
+
+训练数据、模型存档和生成进度都在 `work/`，几十 GB，跑的过程中别删。
+
+---
+
+## 显存配置
+
+默认 `config.json` 按 12 GB 显存调校，12 GB 的卡直接用。以下是 RTX 5070 Ti Laptop（11.9 GB）实测的单步峰值：
+
+| 阶段 | 默认 batch | 峰值显存 |
+|---|---|---|
+| vq256 | 4 | 3.1 GB |
+| vq384 | 2 | 3.4 GB |
+| vq512 | 1 | 3.0 GB |
+| direct256 | 6 | 4.6 GB |
+| direct384 | 3 | 5.2 GB |
+| latent256 | 6 | 5.4 GB |
+| latent384 | 4 | 7.8 GB |
+| latent512 | 4 | 11.2 GB |
 
 ### 推荐值
 
-只列需要改的地方，没列出来的保持默认。
-
-| 显存 | 要改什么 |
+| 显存 | 怎么改 |
 |---|---|
-| **8 GB** | `fusion.diffusion.phases[2]`（latent512）：`batch_size` 4 → **2**，`gradient_accumulation` 1 → **2** |
-| **12 GB** | **不用改**，默认就是 |
-| **16 GB 及以上** | 把累积折掉，换成更大的实际批：<br>`fusion.vq.phases[1]`（vq384）：批 3 → **6**，累积 2 → **1**<br>`fusion.vq.phases[2]`（vq512）：批 1 → **4**，累积 4 → **1**<br>`fusion.direct_baseline.phases[1]`：批 3 → **6**，累积 2 → **1**<br>`fusion.refiner`：批 2 → **4**，累积 2 → **1**<br>`fusion.purification`：批 2 → **4**，累积 2 → **1** |
+| 16 GB+ | 不用改 |
+| 12 GB | 不用改 |
+| 10 GB | `latent512` 的 `batch_size` 4→2，`gradient_accumulation` 1→2 |
+| 8 GB | 同上，另加 `latent384` 4→2 / 1→2 |
+| 6 GB | 所有阶段 `batch_size` 减半、`gradient_accumulation` 翻倍 |
 
-### 一条必须遵守的规则
+规则：`batch_size × gradient_accumulation` 的乘积要保持不变，否则等效批量变了，学习率不再匹配。
 
-**`batch_size × gradient_accumulation` 这个乘积不能变。**
-
-这个乘积叫**有效批大小**，它决定训练结果。显存小就把 `batch_size` 减半、`gradient_accumulation` 翻倍，算出来的梯度是一样的，只是分几次攒。乘积变了，训练行为就变了，不只是快慢的差别——学习率也得跟着重调。
-
-### 显存更大不会快很多
-
-这条流水线是**算力受限**的，不是显存受限。实测把梯度累积折掉后，扩散阶段只快了 1.06 倍，VQ 阶段 1.12 倍。24 GB 的卡和 16 GB 的卡跑同一份配置速度基本一样——多出来的显存没有地方可花，除非你提高有效批大小（会改变训练结果）或者提高分辨率。
-
-**别指望换大显存的卡能把几周缩短成几天。** 真正决定时间的是 GPU 算力和字数。
-
-### 各阶段装得下多大的批
-
-在 11.9 GB 卡上跑真实训练步实测的峰值，按 85% 预算（10.15 GB）划线。给显存更大的卡参考：
-
-| 扩散相位 | 默认批 | 默认峰值 | 装得下的最大批 | 该批峰值 |
-|---|---|---|---|---|
-| latent256 | 6 | 2.5 GB | **24 以上** | 8.6 GB |
-| latent384 | 4 | 3.5 GB | **12** | 9.6 GB |
-| latent512 | 4 | 5.9 GB | **6** | 8.6 GB |
-
-超过这条线不是"慢一点"那么简单。latent384 用批 16 时峰值 12.7 GB 超过了物理显存，Windows 会把它换页到内存，单步从 0.54 秒掉到 5.9 秒——**慢 11 倍，等于不可用**。
-
-**这张表的用途是告诉你什么装得下，不是建议你调上去。** 同一个配置重复测两次，吞吐量相差 17%（48.0 和 56.2 样本/秒），整个批大小扫描的结果都落在这个噪声里，没有上升趋势。
+显存更大不会明显更快。瓶颈是计算不是显存，实测 batch 从 4 加到 8 的吞吐提升在 10% 以内。
 
 ---
 
-## CPU 相关参数
+## CPU 配置
 
-这些在配置文件的 `training` 块里。
+`training.workers` 是数据加载进程数，默认 4。
 
-| 参数 | 默认 | 作用 |
-|---|---|---|
-| `workers` | 8 | 数据加载的子进程数。**唯一值得按机器调的那个** |
-| `cpu_threads` | 6 | 主进程的 PyTorch 线程数 |
-| `opencv_threads` | 1 | OpenCV 线程数 |
-| `interop_threads` | 1 | PyTorch 跨算子并行线程数 |
-| `prefetch_factor` | 4 | 每个 worker 预取多少批 |
-| `image_cache_mb_per_process` | 192 | 每个进程的图像缓存 |
-
-### 只调 `workers`
-
-| 逻辑核心 | 建议 `workers` |
+| 物理核心 | workers |
 |---|---|
-| 4–8 | 2–4 |
-| 8–16 | 4–6 |
-| 16–32 | 8 |
-| 32 以上 | 8–12，再多收益很小 |
+| 4 核 | 2 |
+| 6-8 核 | 4（默认） |
+| 12 核以上 | 6-8 |
 
-**内存是真正的约束，不是核心数。** Windows 上每个 worker 是独立进程、各自完整导入一次 PyTorch，约 400 MB；Linux 用 fork 会省一些。12 个 worker 在 Windows 上要 5 GB 左右。内存不足 16 GB 就别超过 4。
+每个 worker 约占 1.5-2 GB 内存，内存紧张就调小。
 
-改 `workers` 不会让任何阶段重训——它不在检查点的兼容性检查里。
+`cpu_threads`、`interop_threads`、`opencv_threads` 不要调大。训练是 GPU 密集型，这三个调大只会让 CPU 抢占 GPU 的调度时间。
 
-### 另外三个不要调大
-
-`cpu_threads`、`opencv_threads`、`interop_threads` 在代码里分别被**硬性封顶在 6、2、2**，写更大的数没有效果。
-
-这个上限是故意的。字形转换在 GPU 批次之间要做几千次小的 OpenCV 操作，如果让 OpenCV、OpenBLAS 和 PyTorch 各自建立完整的线程池，在核心多的机器上反而会慢到像卡死。每个数据加载 worker 内部也强制设成单线程，就是为了避免这种过度订阅。
-
-### 判断要不要加 worker
-
-跑起来之后同时看两个数：
-
-```bash
-nvidia-smi --query-gpu=utilization.gpu --format=csv
-```
-
-- **GPU 长期低于 80%，同时 CPU 没跑满** → 加 `workers` 可能有用
-- **GPU 稳定 85% 以上** → 数据加载不是瓶颈，加了也没用
-- **CPU 接近 100%** → 已经受限于 CPU，加 worker 只会更糟
-
-参考实测：16 物理核 / 32 逻辑核的机器上，`workers` 为 4 时 GPU 平均 85%、CPU 只占 8%——数据加载本来就没跑满，所以加到 8 的收益也就 5–10%。
+判断要不要加 worker：跑起来后看终端的 batch/s。如果 GPU 利用率（`nvidia-smi`）长期低于 80%，加 worker 有用；已经 90% 以上就是计算受限，加了没用。
 
 ---
 
-## 怎么改配置文件
+## 改配置
 
-### 文件在哪
+配置在项目根目录的 `config.json`，四个启动脚本传的都是它。保存时必须存 UTF-8。
 
-项目根目录的 **`config.json`**。四个启动脚本（`run.bat` / `run.sh` 等）传的都是这一个文件，改它就够了。
-
-用记事本、VS Code 或任何文本编辑器都能打开。**保存时必须存成 UTF-8。**
-
-### 怎么找到要改的地方
-
-配置是一层套一层的。上面写的 `fusion.vq.phases[2].batch_size` 就是这样往下找：
-
-```json
-{
-  "fusion": {                    ← 找到 "fusion"
-    "vq": {                      ← 里面找 "vq"
-      "phases": [                ← 里面找 "phases"，这是个列表
-        { "name": "vq256", ... },     ← [0] 第一个
-        { "name": "vq384", ... },     ← [1] 第二个
-        { "name": "vq512",            ← [2] 第三个（从 0 数起）
-          "size": 512,
-          "batch_size": 1,       ← 改这里
-          "gradient_accumulation": 4
-        }
-      ]
-    }
-  }
-}
-```
-
-每个阶段都有 `name`，照着名字找最保险。
-
-### 完整例子：8 GB 显卡
-
-找到 `fusion` → `diffusion` → `phases`，里面 `"name": "latent512"` 那一段：
+各阶段都有 `name` 字段，照名字找。例如 8 GB 显卡要改 `fusion` → `diffusion` → `phases` 里 `"name": "latent512"` 那一段：
 
 ```json
 {
   "name": "latent512",
-  "size": 512,
-  "batch_size": 2,             ← 原来是 4
-  "gradient_accumulation": 2,  ← 原来是 1
-  ...其余不动
+  "batch_size": 2,
+  "gradient_accumulation": 2
 }
 ```
 
-乘积从 `4 × 1` 变成 `2 × 2`，还是 4，没变。
+乘积仍是 4，没变。
 
-### 改之前一定要知道：哪些改动会让已有进度作废
+### 哪些改动会作废已有进度
 
-程序用「指纹」判断存档能不能接着用。指纹对不上就**从这个阶段的第 1 轮重新开始**，之前跑的全部作废。
+程序用指纹判断存档能否续用，对不上就从该阶段第 1 轮重来。
 
-| 你改的 | 后果 |
+| 改动 | 后果 |
 |---|---|
-| `fusion.vq.phases[]` 里的**任何一项** | 该 VQ 阶段从头重训 |
-| `fusion.diffusion.phases[]` 里的**任何一项** | 该扩散阶段从头重训 |
-| `fusion.style_encoder` 的 `size`、`epochs`、`batch_size`、`learning_rate`、`virtual_length`、`references_per_set`、`cell_grid`、`query_gain` | 风格阶段从头重训 |
-| `fusion.refiner` 的 `size`、`epochs`、`batch_size`、`gradient_accumulation`、`learning_rate` | 精修阶段从头重训 |
-| `fusion.style_encoder.early_stopping` 里的任何一项 | **安全**，下一轮就生效 |
-| `fusion.refiner.minimum_epochs`、`minimum_relative_improvement` | **安全** |
-| `training.workers`、`training.amp`、各阶段的 `checkpoint_every_steps`、`preview_every` | **安全** |
-| `build` 里的**任何一项** | **安全**，`build` 只在最后生成 TTF 时读取，不参与任何训练指纹 |
+| `fusion.vq.phases[]` 任何一项 | 该 VQ 阶段重训 |
+| `fusion.diffusion.phases[]` 任何一项 | 该扩散阶段重训 |
+| `fusion.style_encoder` 的 `size`、`epochs`、`batch_size`、`learning_rate`、`virtual_length`、`references_per_set`、`cell_grid`、`query_gain` | 风格阶段重训 |
+| `fusion.refiner` 的 `size`、`epochs`、`batch_size`、`gradient_accumulation`、`learning_rate` | 精修阶段重训 |
+| `fusion.style_encoder.early_stopping` | 安全 |
+| `fusion.refiner.minimum_epochs`、`minimum_relative_improvement` | 安全 |
+| `training.workers`、`training.amp`、`checkpoint_every_steps`、`preview_every` | 安全 |
+| `build` 任何一项 | 安全，只在最后生成 TTF 时读取 |
 
-**有一个容易踩的坑**：VQ 和扩散的 `early_stopping` 是写在 phase 里面的，所以改它**也会**导致该阶段重训——这一点和风格阶段、精修阶段不一样。
+VQ 和扩散的 `early_stopping` 写在 phase 里面，改它也会导致该阶段重训，这点和风格、精修阶段不同。
 
-所以：**显存相关的参数请在开跑之前定好。** 跑到一半发现爆显存再改，那个阶段就得重来。
+显存相关参数请在开跑前定好，跑到一半改那个阶段要重来。
 
-### 爆显存了怎么办
+### 爆显存
 
-看到 `CUDA out of memory` 时，先看报错发生在哪个阶段（终端会打印阶段名，例如 `vq512`、`latent384`），然后：
+看报错发生在哪个阶段（终端会打印阶段名），只改那一段：`batch_size` 减半、`gradient_accumulation` 翻倍，还爆就再来一次。
 
-1. 找到那个阶段，`batch_size` 减半
-2. 同一段里 `gradient_accumulation` 翻倍
-3. 还爆就再重复一次
+### 字体太大
 
-只改出问题的那个阶段，别一次全改。
-
-### 生成的字体文件太大怎么办
-
-字体体积几乎全在字形轮廓上——手工字体里 `glyf` 表通常占 90% 以上。控制它的是 `build.curve_simplify`，也就是轮廓简化的容差，值越大保留的点越少。
-
-在参考字体上实测 17 个不同复杂度的字，Dice 是简化后的轮廓和原始栅格的吻合度：
+体积几乎全在字形轮廓上。控制它的是 `build.curve_simplify`，值越大保留的点越少。在参考字体上实测 17 个不同复杂度的字：
 
 | `curve_simplify` | 点数/字 | Dice |
 |---|---|---|
 | 0.55 | 611 | 0.9848 |
-| **1.2（默认）** | **167** | 0.9843 |
+| 1.2（默认） | 167 | 0.9843 |
 | 1.8 | 130 | 0.9812 |
 | 2.5 | 117 | 0.9786 |
 
-做个参照：手工设计的字体大约是 **156 点/字**。默认的 1.2 就在这个水平，对应两万多字的成品约 14 MB。
+手工设计的字体约 156 点/字，默认值就在这个水平，两万多字约 14 MB。超过 1.8 吻合度明显下降；调到 0.55 也没好处，多出的点是在描栅格锯齿而非字形。
 
-超过 1.8 之后吻合度开始明显下降，不建议再往上调。反过来调到 0.55 那种很小的值也没有好处——多出来的点是在描栅格锯齿而不是字形，Dice 反而不会更好。
+其余旋钮效果很弱，`maximum_points_per_contour` 从 480 压到 96 也只减到 69%，不用动。
 
-其他几个旋钮效果都很弱，实测把 `maximum_points_per_contour` 从 480 压到 96 也只减到 69%，不用动。
-
-想知道自己的成品到底大在哪：
+看成品大在哪：
 
 ```bash
 python tools/font_size_report.py build/target-HanziStyleForge.ttf
 ```
 
-它会按表列出字节占比和每个字的点数分布。
-
-### 改完怎么确认没写坏
+### 检查改动
 
 ```bash
-verify.bat
+verify.bat        # Linux/macOS: ./verify.sh
 ```
 
-Linux / macOS 用 `./verify.sh`。它会检查 JSON 语法和取值范围。JSON 最常见的错误是**多了或少了逗号**——最后一项后面不能有逗号。
+检查 JSON 语法和取值范围。JSON 最常见的错误是多了或少了逗号，最后一项后面不能有逗号。
 
 ---
 
-## 开始使用
+## 中断
 
-### Windows
+每个阶段和每个生成的字都有存档，再跑一次同样的命令就从断点继续。断电、蓝屏、Ctrl+C 都一样。启动脚本还会在出错后自动重试，连续失败 20 次才停。
 
-双击这四个文件，按顺序：
-
-| 步骤 | 双击 | 做什么 |
-|---|---|---|
-| 1 | `install.bat` | 装环境。只需一次 |
-| 2 | — | 把两个字体放进 `fonts\` 和 `refs\` |
-| 3 | `verify.bat` | 检查一切正常 |
-| 4 | `run.bat` | 开跑 |
-
-想中途暂停就双击 `stop.bat`，程序会在下一个存档点安全退出。再次双击 `run.bat` 就接着跑。
-
-### Linux 和 macOS
-
-打开终端，进入项目目录：
-
-```bash
-./install.sh
-```
-
-把两个字体放进 `fonts/` 和 `refs/`，然后：
-
-```bash
-./verify.sh
-./run.sh
-```
-
-想中途暂停：
-
-```bash
-./stop.sh
-```
-
-再运行一次 `./run.sh` 就从存档点接着跑。
-
-> 如果提示 `Permission denied`，先执行 `chmod +x *.sh`。
+不用启动脚本、自己敲命令恢复时注意：主动请求停止会在根目录留下 `STOP_AFTER_CHECKPOINT` 标记，启动脚本每次启动会自动删，手敲不会，那样新运行会在第一个检查点就停下。手动恢复前先删掉它。
 
 ---
 
-## 产出在哪
+## 其他工具
 
-```text
-build/target-HanziStyleForge.ttf        ← 成品字体
-build/target-HanziStyleForge.ttf.report.json   ← 构建报告
-work/qa/index.html      ← 质检报告，用浏览器打开
+```bash
+python png_to_svg.py <图片目录> [输出目录]
 ```
 
-**装字体之前先看质检报告。** 里面有逐字对照图，能看出哪些字生成得好、哪些回退成了参考字形。
-
-训练数据、模型存档和生成进度都在 `work/`，几十 GB，**跑的过程中别删**。
-
----
-
-## 中断了会怎样
-
-不会怎样。每个阶段和每个生成的字都有存档，再跑一次同样的命令就从断点继续。
-
-断电、蓝屏、Ctrl+C 都一样。Windows 的 `run.bat` 和 Linux/macOS 的 `run.sh` 还会在出错后自动重试，连续失败 20 次才会停下来——那说明是真的有问题，不是一时的波动。
-
-> **如果你不用启动脚本、而是自己敲命令恢复**：主动请求停止会在项目根目录留下一个 `STOP_AFTER_CHECKPOINT` 标记文件。启动脚本每次启动都会自动删掉它，手动敲命令则不会，那样新的运行会在第一个检查点就停下。手动恢复前先删掉这个文件（Windows `del STOP_AFTER_CHECKPOINT`，Linux/macOS `rm -f STOP_AFTER_CHECKPOINT`）。
+把一批字形图片矢量化成 SVG，用的是和 `build` 相同的轮廓提取。简化容差按输入图尺寸自动缩放。
 
 ---
 
 ## 常见问题
 
-**要跑多久？**
-几天到几周，取决于字数和显卡。默认配置在 12 GB 的笔记本显卡上是按周计的。
+**要跑多久？** 几天到几周，取决于字数和显卡。默认配置在 12 GB 笔记本显卡上按周计。
 
-**能不能只跑一部分字？**
-可以。在配置文件里把 `scope.mode` 改成 `chars_file`，用 `scope.extra_chars_file` 指向一个字表文件（每行一个字或一个 `U+4E00` 形式的码位）。先拿几百字试跑一遍是个好习惯。
+**能只跑一部分字吗？** 可以。`scope.mode` 改成 `chars_file`，`scope.extra_chars_file` 指向字表（每行一个字或 `U+4E00` 形式的码位）。先拿几百字试跑是个好习惯。
 
-**生成的字会不会不符合规范？**
-程序有一道结构闸门：生成的字如果连通分量数、孔洞数和参考字对不上，就会被拒绝并改用参考字形。这保证不会出现"多一笔少一笔"的错字，代价是有一部分字保持参考字体的样子而不是目标风格。
+**生成的字会不会不符合规范？** 有一道结构闸门：连通分量数、孔洞数和参考字对不上就拒绝，改用参考字形。这保证不出现多一笔少一笔的错字，代价是一部分字保持参考字体的样子。
 
-**非汉字内容会被改吗？**
-不会。拉丁字母、数字、标点、假名、谚文,以及 OpenType 的排版和 hinting 数据都从 `target.ttf` 原样保留，构建时会逐字节校验。
+**非汉字内容会被改吗？** 不会。拉丁字母、数字、标点、假名、谚文，以及 OpenType 排版和 hinting 数据都从 `target.ttf` 原样保留，构建时逐字节校验。
 
-**报错 `requires CUDA, but torch.cuda.is_available() is False`？**
-没检测到可用的 NVIDIA 显卡。更新显卡驱动，或确认装的是 CUDA 版 PyTorch。
+**报错 `requires CUDA, but torch.cuda.is_available() is False`** 没检测到可用的 NVIDIA 显卡。更新驱动，或确认装的是 CUDA 版 PyTorch。
 
-**报错 `does not support training.device='mps'`？**
-Apple GPU 不受支持。见上面的硬件要求。
+**报错 `does not support training.device='mps'`** Apple GPU 不受支持。
 
 ---
 
-## 使用前须知
+## 须知
 
-- 完整流程可能持续数天、数周或更久
+- 完整流程可能持续数天到数周
 - 本仓库不含任何字体文件、预训练权重或第三方数据集
-- **生成的字体可能同时受 `target.ttf` 和 `ref.otf` 的许可证约束**。请只使用你有权训练、修改和发布的字体
-- 这是实验性工具。正式发布前请检查质检报告并人工测试
+- 生成的字体可能同时受 `target.ttf` 和 `ref` 的许可证约束。请只使用你有权训练、修改和发布的字体
+- 实验性工具。发布前请检查质检报告并人工测试
 
-本软件采用 Apache License 2.0，见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。这个许可证**只覆盖软件本身**，不授予你对任何字体的训练、修改或发布权利。
-
-第三方引用和许可信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本软件采用 Apache License 2.0，见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。许可证只覆盖软件本身，不授予你对任何字体的训练、修改或发布权利。第三方引用见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ---
 
@@ -377,7 +272,7 @@ target.ttf（风格）  ref.otf（字形结构）
    多候选生成 → 结构闸门筛选 → 质检 → 轮廓矢量化 → TTF
 ```
 
-程序只从 `target.ttf` 学风格，只从 `ref.otf` 取结构，两者的数据流是分开的并在运行时校验。
+训练样本有两种：目标字体自重建，以及同形字表覆盖的「参考结构 → 目标字形」配对。两者的真值都只来自 `target.ttf`，结构输入只来自 `target` 自身或 `ref`，数据流在运行时校验。
 
 ## 贡献
 

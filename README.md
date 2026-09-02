@@ -38,7 +38,15 @@
 
 结构不同的字**不能**放进去——那等于教模型把一种地区字形转成另一种，与参考字体的用途相反。
 
-格式和制作方法见 [data/README.md](data/README.md)。简单说：自动筛选只能缩小范围，拓扑比较看不出日式字形、错误起收笔这类差异，最后仍需逐字过目。
+制作分两步，中间是你的眼睛：
+
+```bash
+python tools/same_form_review.py render --screen   # 生成左右对比图到 same_form_review/
+# 删掉左右结构不同的那些图
+python tools/same_form_review.py collect           # 按剩下的文件名写出字表
+```
+
+`--screen` 会先扔掉连通分量/孔洞/欧拉数已经对不上的字，第一遍值得开——它是在减少工作量，不是在下判断。拓扑比较看不出日式字形、错误起收笔这类差异，留下的仍需逐字过目。格式见 [data/README.md](data/README.md)。
 
 ---
 

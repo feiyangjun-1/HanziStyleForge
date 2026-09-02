@@ -38,7 +38,15 @@ With this file, `prepare` builds one "reference structure to target glyph" train
 
 Characters whose two fonts disagree structurally **must not** be in the list. Such a pair teaches the model to convert one regional form into another, which is the opposite of what the reference is for.
 
-Format and how to build one are in [data/README.md](data/README.md). In short: automatic screening narrows the field, but a topology comparison cannot see a Japanese glyph form or a wrong stroke terminal, so every survivor still has to be looked at.
+Building one is two steps with your eyes in the middle:
+
+```bash
+python tools/same_form_review.py render --screen   # side-by-side images into same_form_review/
+# delete the images whose two halves differ structurally
+python tools/same_form_review.py collect           # writes the list from what survived
+```
+
+`--screen` drops characters whose component, hole or Euler counts already disagree, which is worth it on a first pass -- it reduces the workload rather than deciding anything. A topology comparison cannot see a Japanese glyph form or a wrong stroke terminal, so every survivor still has to be looked at. Format details are in [data/README.md](data/README.md).
 
 ---
 

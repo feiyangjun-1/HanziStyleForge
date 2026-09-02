@@ -38,15 +38,17 @@
 
 结构不同的字**不能**放进去——那等于教模型把一种地区字形转成另一种，与参考字体的用途相反。
 
-制作分两步，中间是你的眼睛：
-
 ```bash
-python tools/same_form_review.py render --screen   # 生成左右对比图到 same_form_review/
-# 删掉左右结构不同的那些图
-python tools/same_form_review.py collect           # 按剩下的文件名写出字表
+python tools/same_form_review.py
 ```
 
-`--screen` 会先扔掉连通分量/孔洞/欧拉数已经对不上的字，第一遍值得开——它是在减少工作量，不是在下判断。拓扑比较看不出日式字形、错误起收笔这类差异，留下的仍需逐字过目。格式见 [data/README.md](data/README.md)。
+打开一个窗口，逐字左右对照显示两个字体。字形相同按 `y`，不同按 `n`；左右方向键跳过不判定，`u` 撤销当前字的判定。**每按一次键立即写盘**，关窗、断电最多丢一个按键，重开从第一个未判定的字继续。
+
+`--only-undecided` 跳过已判定的字，`--sort suspicious` 把拓扑差异最大的排前面，先清掉明显不同的。
+
+已有字表但没有进度文件时，会把表里的字当作"已判定为相同"载入并留一份 `.bak`，是在原有基础上继续，不会覆盖。
+
+格式见 [data/README.md](data/README.md)。
 
 ---
 

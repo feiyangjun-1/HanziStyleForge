@@ -16,25 +16,23 @@ the opposite of what the reference is for.
 **Format**: the characters themselves, any amount of whitespace or line breaks
 between them; `U+XXXX` tokens and `#` comment lines are also accepted.
 
-**Building one.** Two steps, with your eyes in the middle:
+**Building one.**
 
 ```bash
-python tools/same_form_review.py render --screen
+python tools/same_form_review.py
 ```
 
-Renders every character both fonts cover as one side-by-side image into
-`same_form_review/`, target on the left and ref on the right, named by the
-character so a folder in large-icon view is readable as-is. `--screen` drops
-the characters whose component, hole or Euler counts already disagree, which
-is worth it on a first pass; it is a filter on the workload, not a verdict.
+Opens a window showing each character in both fonts side by side. Press `y` if
+the forms match and `n` if they do not; `left`/`right` move without deciding and
+`u` clears a verdict. Every keystroke rewrites this file, so closing the window
+or losing power costs at most the keystroke in flight, and reopening resumes at
+the first undecided character. `--only-undecided` skips what you have already
+judged, and `--sort suspicious` puts the largest topology disagreements first,
+which clears the obvious mismatches quickly.
 
-Then delete the images whose two halves differ structurally, and:
-
-```bash
-python tools/same_form_review.py collect
-```
-
-which reads the filenames that survived and writes this file.
+If this file already exists when no progress file does, its characters are
+loaded as accepted verdicts and a `.bak` copy is kept, so an existing list is
+refined rather than overwritten.
 
 **Automatic screening is not sufficient on its own.** Comparing
 two styled fonts directly does not work at all -- stroke weight and terminal

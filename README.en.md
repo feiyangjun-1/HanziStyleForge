@@ -38,15 +38,17 @@ With this file, `prepare` builds one "reference structure to target glyph" train
 
 Characters whose two fonts disagree structurally **must not** be in the list. Such a pair teaches the model to convert one regional form into another, which is the opposite of what the reference is for.
 
-Building one is two steps with your eyes in the middle:
-
 ```bash
-python tools/same_form_review.py render --screen   # side-by-side images into same_form_review/
-# delete the images whose two halves differ structurally
-python tools/same_form_review.py collect           # writes the list from what survived
+python tools/same_form_review.py
 ```
 
-`--screen` drops characters whose component, hole or Euler counts already disagree, which is worth it on a first pass -- it reduces the workload rather than deciding anything. A topology comparison cannot see a Japanese glyph form or a wrong stroke terminal, so every survivor still has to be looked at. Format details are in [data/README.md](data/README.md).
+Opens a window showing each character in both fonts side by side. Press `y` if the forms match, `n` if they do not; arrow keys move without deciding and `u` clears a verdict. **Every keystroke is written to disk**, so closing the window or losing power costs at most the keystroke in flight, and reopening resumes at the first undecided character.
+
+`--only-undecided` skips what you have already judged; `--sort suspicious` puts the largest topology disagreements first, clearing the obvious mismatches quickly.
+
+If the list already exists and no progress file does, its characters load as accepted verdicts and a `.bak` copy is kept, so an existing list is refined rather than overwritten.
+
+Format details are in [data/README.md](data/README.md).
 
 ---
 

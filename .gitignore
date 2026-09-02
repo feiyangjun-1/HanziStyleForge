@@ -56,3 +56,8 @@ quick_direct_test_output/
 
 # The reviewed same-form character list is the user's own work, not shipped.
 data/same_form_han.txt
+
+# same_form_review.py working files
+same_form_review_state.json
+same_form_review_scores.json
+data/same_form_han.txt.bak

@@ -16,7 +16,27 @@ the opposite of what the reference is for.
 **Format**: the characters themselves, any amount of whitespace or line breaks
 between them; `U+XXXX` tokens and `#` comment lines are also accepted.
 
-**Building one.** Automatic screening is not sufficient on its own. Comparing
+**Building one.** Two steps, with your eyes in the middle:
+
+```bash
+python tools/same_form_review.py render --screen
+```
+
+Renders every character both fonts cover as one side-by-side image into
+`same_form_review/`, target on the left and ref on the right, named by the
+character so a folder in large-icon view is readable as-is. `--screen` drops
+the characters whose component, hole or Euler counts already disagree, which
+is worth it on a first pass; it is a filter on the workload, not a verdict.
+
+Then delete the images whose two halves differ structurally, and:
+
+```bash
+python tools/same_form_review.py collect
+```
+
+which reads the filenames that survived and writes this file.
+
+**Automatic screening is not sufficient on its own.** Comparing
 two styled fonts directly does not work at all -- stroke weight and terminal
 shape swamp the signal, and no threshold separates them. Comparing two regional
 cuts of one family (for example Source Han Serif CN against TW) is much cleaner,
